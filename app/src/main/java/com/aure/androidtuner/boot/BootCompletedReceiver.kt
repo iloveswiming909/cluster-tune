@@ -3,7 +3,6 @@ package com.aure.androidtuner.boot
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import com.aure.androidtuner.AppContainer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,27 +20,12 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 val container = AppContainer(context)
                 val settings = container.settingsStorage.settings.first()
                 if (!settings.applyLastPresetOnBoot) {
-                    Log.d(TAG, "Boot apply skipped: setting disabled")
                     return@launch
                 }
-                val result = container.repository.applyPersistedLastValuesOnBoot()
-                result
-                    .onSuccess { outcome ->
-                        Log.d(
-                            TAG,
-                            "Boot apply finished: verificationPassed=${outcome.verificationPassed}",
-                        )
-                    }
-                    .onFailure { throwable ->
-                        Log.w(TAG, "Boot apply failed", throwable)
-                    }
+                container.repository.applyPersistedLastValuesOnBoot()
             } finally {
                 pendingResult.finish()
             }
         }
-    }
-
-    private companion object {
-        const val TAG = "BootCompletedReceiver"
     }
 }
