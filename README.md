@@ -1,4 +1,7 @@
-# ClusterTune
+<h1>
+  <img src="docs/app-icon.svg" alt="" width="48" align="left">
+  ClusterTune
+</h1>
 
 ClusterTune is an Android utility for tuning CPU frequency limits on supported handheld devices. It lets you adjust CPU clusters, save performance profiles, and access quick controls from an Android Quick Settings tile.
 
