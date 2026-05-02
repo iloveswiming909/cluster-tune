@@ -270,14 +270,16 @@ class PerformanceRepository(
             return Result.failure(IllegalStateException("Tile controls are unavailable"))
         }
 
-        val cycleProfiles = state.bundledProfiles + listOfNotNull(state.stockProfile)
+        val cycleProfiles = state.displayProfiles.filter { profile ->
+            profile.source != ProfileSource.VIRTUAL || profile.id == ProfileStateResolver.STOCK_PROFILE_ID
+        }
         if (cycleProfiles.isEmpty()) {
             return Result.failure(IllegalStateException("No profiles available for tile cycling"))
         }
 
         val currentIndex = cycleProfiles.indexOfFirst { it.id == state.activeDisplayProfileId }
         val nextProfile = if (currentIndex == -1) {
-            cycleProfiles.lastOrNull { it.id == ProfileStateResolver.STOCK_PROFILE_ID } ?: cycleProfiles.first()
+            cycleProfiles.first()
         } else {
             cycleProfiles[(currentIndex + 1) % cycleProfiles.size]
         }
