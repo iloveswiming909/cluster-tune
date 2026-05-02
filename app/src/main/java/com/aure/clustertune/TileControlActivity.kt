@@ -1,4 +1,4 @@
-package com.aure.androidtuner
+package com.aure.clustertune
 
 import android.content.Context
 import android.content.Intent
@@ -11,17 +11,17 @@ import androidx.activity.viewModels
 import androidx.compose.material3.Surface
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.aure.androidtuner.model.TileInteractionBehavior
-import com.aure.androidtuner.ui.CompactTunerScreen
-import com.aure.androidtuner.ui.TunerViewModel
-import com.aure.androidtuner.ui.theme.AndroidTunerTheme
+import com.aure.clustertune.model.TileInteractionBehavior
+import com.aure.clustertune.ui.CompactTunerScreen
+import com.aure.clustertune.ui.TunerViewModel
+import com.aure.clustertune.ui.theme.ClusterTuneTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class TileControlActivity : ComponentActivity() {
 
     companion object {
-        private const val ACTION_OPEN_DIALOG = "com.aure.androidtuner.action.OPEN_TILE_DIALOG"
+        private const val ACTION_OPEN_DIALOG = "com.aure.clustertune.action.OPEN_TILE_DIALOG"
         private const val ACTION_QS_TILE_PREFERENCES = "android.service.quicksettings.action.QS_TILE_PREFERENCES"
 
         fun createDialogIntent(context: Context): Intent {
@@ -49,24 +49,31 @@ class TileControlActivity : ComponentActivity() {
 
             if (launchedFromLongPress) {
                 val settings = container.settingsStorage.settings.first()
-                if (settings.tileLongPressBehavior == TileInteractionBehavior.CYCLE_PRESETS) {
-                    container.repository.cycleTilePreset()
-                        .onSuccess { profile ->
-                            Toast.makeText(
-                                applicationContext,
-                                "Applied ${profile.name}",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                        .onFailure { throwable ->
-                            Toast.makeText(
-                                applicationContext,
-                                throwable.message ?: "Failed to cycle preset",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    finish()
-                    return@launch
+                when (settings.tileLongPressBehavior) {
+                    TileInteractionBehavior.SHOW_DIALOG -> Unit
+                    TileInteractionBehavior.OPEN_APP -> {
+                        openFullApp()
+                        return@launch
+                    }
+                    TileInteractionBehavior.CYCLE_PROFILES -> {
+                        container.repository.cycleTileProfile()
+                            .onSuccess { profile ->
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Applied ${profile.name}",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            .onFailure { throwable ->
+                                Toast.makeText(
+                                    applicationContext,
+                                    throwable.message ?: "Failed to cycle profile",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        finish()
+                        return@launch
+                    }
                 }
             }
 
@@ -77,7 +84,7 @@ class TileControlActivity : ComponentActivity() {
     private fun setEditorContent() {
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
-            AndroidTunerTheme(settings = settings) {
+            ClusterTuneTheme(settings = settings) {
                 Surface {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
                     CompactTunerScreen(
@@ -86,27 +93,26 @@ class TileControlActivity : ComponentActivity() {
                         onApplyProfile = viewModel::applyProfile,
                         onClearSelection = viewModel::clearSelection,
                         onApplyCurrent = { tunerState ->
-                            viewModel.applyCurrent(tunerState) { presetName ->
-                                Toast.makeText(applicationContext, "Applied $presetName", Toast.LENGTH_SHORT).show()
+                            viewModel.applyCurrent(tunerState) { profileName ->
+                                Toast.makeText(applicationContext, "Applied $profileName", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        onCreatePreset = viewModel::createUserPreset,
-                        onUpdatePreset = viewModel::updateProfile,
-                        onDeletePreset = viewModel::deletePreset,
-                        onMovePreset = viewModel::moveProfile,
-                        onResetProfiles = viewModel::resetProfilesToDefault,
                         onDismissRequest = ::finish,
                         onOpenFullApp = {
-                            startActivity(
-                                Intent(this, MainActivity::class.java).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                },
-                            )
-                            finish()
+                            openFullApp()
                         },
                     )
                 }
             }
         }
+    }
+
+    private fun openFullApp() {
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+        )
+        finish()
     }
 }
