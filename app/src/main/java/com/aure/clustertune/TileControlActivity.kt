@@ -11,7 +11,10 @@ import androidx.activity.viewModels
 import androidx.compose.material3.Surface
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.TileInteractionBehavior
+import com.aure.clustertune.model.TunerState
+import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import com.aure.clustertune.ui.CompactTunerScreen
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
@@ -58,6 +61,7 @@ class TileControlActivity : ComponentActivity() {
                     TileInteractionBehavior.CYCLE_PROFILES -> {
                         container.repository.cycleTileProfile()
                             .onSuccess { profile ->
+                                QuickSettingsTileRefresher.requestUpdate(applicationContext)
                                 Toast.makeText(
                                     applicationContext,
                                     "Applied ${profile.name}",
@@ -93,9 +97,7 @@ class TileControlActivity : ComponentActivity() {
                         onApplyProfile = viewModel::applyProfile,
                         onClearSelection = viewModel::clearSelection,
                         onApplyCurrent = { tunerState ->
-                            viewModel.applyCurrent(tunerState) { profileName ->
-                                Toast.makeText(applicationContext, "Applied $profileName", Toast.LENGTH_SHORT).show()
-                            }
+                            applyCurrentFromDialog(tunerState)
                         },
                         onDismissRequest = ::dismissTileDialog,
                         onOpenFullApp = {
@@ -103,6 +105,36 @@ class TileControlActivity : ComponentActivity() {
                         },
                     )
                 }
+            }
+        }
+    }
+
+    private fun applyCurrentFromDialog(state: TunerState) {
+        lifecycleScope.launch {
+            val appliedProfile = ProfileStateResolver.preferredProfileForCurrentValues(state)
+            val result = container.repository.applyValues(
+                policies = state.policies,
+                selectedValues = state.currentValues,
+                isReset = appliedProfile?.id == ProfileStateResolver.STOCK_PROFILE_ID,
+                appliedDisplayProfileId = appliedProfile?.id ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+            )
+            result.onSuccess {
+                container.repository.selectProfile(
+                    appliedProfile?.id?.takeUnless { id -> id == ProfileStateResolver.STOCK_PROFILE_ID },
+                )
+                Toast.makeText(
+                    applicationContext,
+                    "Applied ${appliedProfile?.name ?: "Manual"}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                dismissTileDialog()
+                QuickSettingsTileRefresher.requestUpdate(applicationContext)
+            }.onFailure { throwable ->
+                Toast.makeText(
+                    applicationContext,
+                    throwable.message ?: "Failed to apply limits",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }

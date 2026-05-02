@@ -3,6 +3,8 @@ package com.aure.clustertune.tile
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
@@ -10,6 +12,7 @@ import android.widget.Toast
 import com.aure.clustertune.AppContainer
 import com.aure.clustertune.R
 import com.aure.clustertune.TileControlActivity
+import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.TileInteractionBehavior
 import com.aure.clustertune.model.TunerState
@@ -18,11 +21,31 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.lang.ref.WeakReference
 
 class PerformanceTileService : TileService() {
 
     companion object {
         private const val TAG = "PerformanceTile"
+        private var activeService = WeakReference<PerformanceTileService>(null)
+
+        fun refreshActiveTile(): Boolean {
+            val service = activeService.get() ?: return false
+            service.refreshTileState()
+            return true
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        activeService = WeakReference(this)
+    }
+
+    override fun onDestroy() {
+        if (activeService.get() === this) {
+            activeService.clear()
+        }
+        super.onDestroy()
     }
 
     override fun onTileAdded() {
@@ -38,6 +61,10 @@ class PerformanceTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()
         persistTileAddedState(isAdded = true)
+        refreshTileState()
+    }
+
+    private fun refreshTileState() {
         runCatching {
             val container = AppContainer(applicationContext)
             val state = runBlocking { container.repository.observeState().first() }
@@ -61,16 +88,35 @@ class PerformanceTileService : TileService() {
     private fun buildTileSubtitle(state: TunerState): String {
         return when {
             !state.isPServerAvailable -> getString(R.string.tile_state_unavailable)
-            else -> state.activeDisplayProfileName ?: getString(R.string.tile_state_manual)
+            else -> effectiveTileProfileName(state) ?: getString(R.string.tile_state_manual)
         }
     }
 
     private fun buildTileVisualState(state: TunerState): Int {
         if (!state.isPServerAvailable) return Tile.STATE_INACTIVE
-        val activeName = state.activeDisplayProfileName
-        val stockIsActive = state.activeDisplayProfileId == ProfileStateResolver.STOCK_PROFILE_ID ||
-            activeName == "Stock"
+        val activeProfileId = effectiveTileProfileId(state)
+        val activeName = effectiveTileProfileName(state)
+        val stockIsActive = activeProfileId == ProfileStateResolver.STOCK_PROFILE_ID || activeName == "Stock"
         return if (stockIsActive) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+    }
+
+    private fun effectiveTileProfileId(state: TunerState): String? {
+        return state.lastAppliedDisplayProfileId
+            ?.takeIf { id ->
+                id == ProfileStateResolver.MANUAL_PROFILE_ID ||
+                    id == ProfileStateResolver.STOCK_PROFILE_ID ||
+                    state.displayProfiles.any { profile -> profile.id == id }
+            }
+            ?: state.activeDisplayProfileId
+    }
+
+    private fun effectiveTileProfileName(state: TunerState): String? {
+        val effectiveId = effectiveTileProfileId(state)
+        if (effectiveId == ProfileStateResolver.MANUAL_PROFILE_ID) {
+            return getString(R.string.tile_state_manual)
+        }
+        return state.displayProfiles.firstOrNull { it.id == effectiveId }?.name
+            ?: state.activeDisplayProfileName
     }
 
     private fun persistTileAddedState(isAdded: Boolean) {
@@ -104,30 +150,37 @@ class PerformanceTileService : TileService() {
                     runBlocking {
                         container.repository.cycleTileProfile()
                             .onSuccess { profile ->
-                                Toast.makeText(
-                                    applicationContext,
-                                    "Applied ${profile.name}",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
+                                updateTileForAppliedProfile(profile)
+                                showToast("Applied ${profile.name}")
                             }
                             .onFailure { throwable ->
-                                Toast.makeText(
-                                    applicationContext,
-                                    throwable.message ?: "Failed to cycle profile",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
+                                showToast(throwable.message ?: "Failed to cycle profile")
                             }
                     }
-                    onStartListening()
                 }
             }
         }.onFailure { throwable ->
             Log.e(TAG, "Failed to handle tile tap", throwable)
-            Toast.makeText(
-                applicationContext,
-                throwable.message ?: "Failed to handle tile tap",
-                Toast.LENGTH_SHORT,
-            ).show()
+            showToast(throwable.message ?: "Failed to handle tile tap")
+        }
+    }
+
+    private fun updateTileForAppliedProfile(profile: PerformanceProfile) {
+        qsTile?.apply {
+            label = getString(R.string.tile_title)
+            subtitle = profile.name
+            state = if (profile.id == ProfileStateResolver.STOCK_PROFILE_ID || profile.name == "Stock") {
+                Tile.STATE_INACTIVE
+            } else {
+                Tile.STATE_ACTIVE
+            }
+            updateTile()
+        }
+    }
+
+    private fun showToast(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
         }
     }
 
