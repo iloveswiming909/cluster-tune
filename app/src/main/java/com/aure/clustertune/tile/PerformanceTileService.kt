@@ -110,12 +110,24 @@ class PerformanceTileService : TileService() {
                                     Toast.LENGTH_SHORT,
                                 ).show()
                             }
+                            .onFailure { throwable ->
+                                Toast.makeText(
+                                    applicationContext,
+                                    throwable.message ?: "Failed to cycle profile",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
                     }
                     onStartListening()
                 }
             }
         }.onFailure { throwable ->
             Log.e(TAG, "Failed to handle tile tap", throwable)
+            Toast.makeText(
+                applicationContext,
+                throwable.message ?: "Failed to handle tile tap",
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
