@@ -30,24 +30,19 @@ class CpuPolicyDetector(
             .ifEmpty { listOf(id) }
         val cpuInfoMax = readText("$policyPath/cpuinfo_max_freq")?.toIntOrNull()
         val scalingMax = readText(scalingMaxPath)?.toIntOrNull()
+        val timeInStateMax = readTimeInStateMax("$policyPath/stats/time_in_state")
         val minFreq = readText("$policyPath/scaling_min_freq")?.toIntOrNull()
             ?: rawSupported.firstOrNull()
             ?: 0
-        val supported = rawSupported
-            .let { frequencies ->
-                appendExtraTopBins(
-                    base = frequencies,
-                    extraCandidates = listOfNotNull(scalingMax, cpuInfoMax),
-                )
-            }
-            .ifEmpty {
-                buildFallbackFrequencies(
-                    minFreq = minFreq,
-                    maxFreq = maxOfNotNull(cpuInfoMax, scalingMax) ?: 0,
-                    currentMaxFreq = scalingMax ?: cpuInfoMax ?: 0,
-                )
-            }
-        val stockMax = maxOfNotNull(cpuInfoMax, scalingMax, supported.lastOrNull()) ?: return null
+        val supported = rawSupported.ifEmpty {
+            buildFallbackFrequencies(
+                minFreq = minFreq,
+                maxFreq = maxOfNotNull(cpuInfoMax, scalingMax) ?: 0,
+                currentMaxFreq = scalingMax ?: cpuInfoMax ?: 0,
+            )
+        }
+        val stockMax = supported.lastOrNull() ?: maxOfNotNull(scalingMax, cpuInfoMax) ?: return null
+        val hardwareMax = maxOfNotNull(cpuInfoMax, scalingMax, timeInStateMax, stockMax) ?: stockMax
         val currentMax = scalingMax ?: supported.lastOrNull() ?: cpuInfoMax ?: stockMax
 
         return CpuPolicyInfo(
@@ -56,6 +51,7 @@ class CpuPolicyDetector(
             scalingMaxPath = scalingMaxPath,
             currentMaxFreq = currentMax,
             stockMaxFreq = stockMax,
+            hardwareMaxFreq = hardwareMax,
             minFreq = minFreq,
             supportedFrequencies = supported,
             cpuIds = cpuIds,
@@ -81,23 +77,24 @@ class CpuPolicyDetector(
             .sorted()
     }
 
-    internal fun appendExtraTopBins(
-        base: List<Int>,
-        extraCandidates: List<Int>,
-    ): List<Int> {
-        if (base.isEmpty()) return emptyList()
-        val highestBase = base.last()
-        return (base + extraCandidates.filter { it > highestBase })
-            .distinct()
-            .sorted()
-    }
-
     internal fun parseCpuIds(raw: String?): List<Int> {
         return raw.orEmpty()
             .split(Regex("\\s+"))
             .mapNotNull { it.toIntOrNull() }
             .distinct()
             .sorted()
+    }
+
+    private fun readTimeInStateMax(path: String): Int? {
+        return readText(path)
+            ?.lineSequence()
+            ?.mapNotNull { line ->
+                line.trim()
+                    .split(Regex("\\s+"))
+                    .firstOrNull()
+                    ?.toIntOrNull()
+            }
+            ?.maxOrNull()
     }
 
     private fun maxOfNotNull(vararg values: Int?): Int? {

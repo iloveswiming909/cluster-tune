@@ -55,7 +55,7 @@ class BundledProfileProvider(
                 profile.maxFrequencies.isNotEmpty() &&
                     profile.maxFrequencies.all { (policyId, frequency) ->
                         val policy = policyIds[policyId] ?: return@all false
-                        frequency in policy.supportedFrequencies || frequency == policy.stockMaxFreq
+                        frequency in policy.supportedFrequencies
                     }
             }
     }

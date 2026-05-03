@@ -343,7 +343,7 @@ class PerformanceRepository(
                 profile.maxFrequencies.isNotEmpty() &&
                     profile.maxFrequencies.all { (policyId, frequency) ->
                         val policy = policyIds[policyId] ?: return@all false
-                        frequency in policy.supportedFrequencies || frequency == policy.stockMaxFreq
+                        frequency in policy.supportedFrequencies
                     }
             }
 
@@ -445,7 +445,7 @@ class PerformanceRepository(
         return policies.associate { policy ->
             val supported = policy.supportedFrequencies.toSet()
             val persisted = persistedValues[policy.id]
-            val safeValue = if (persisted != null && (persisted in supported || persisted == policy.stockMaxFreq)) {
+            val safeValue = if (persisted != null && persisted in supported) {
                 persisted
             } else {
                 currentValues[policy.id] ?: policy.currentMaxFreq
@@ -562,9 +562,7 @@ class PerformanceRepository(
         detectedValues: Map<Int, Int>,
     ): Map<Int, Int> {
         if (detectedValues.isEmpty()) return storedValues
-        return detectedValues.mapValues { (policyId, detectedValue) ->
-            maxOf(storedValues[policyId] ?: 0, detectedValue)
-        }
+        return detectedValues
     }
 
     private fun storedStockValuesNeedRepair(
@@ -572,9 +570,7 @@ class PerformanceRepository(
         detectedValues: Map<Int, Int>,
     ): Boolean {
         if (detectedValues.isEmpty()) return false
-        return detectedValues.any { (policyId, detectedValue) ->
-            (storedValues[policyId] ?: 0) < detectedValue
-        }
+        return storedValues != detectedValues
     }
 
     private companion object {

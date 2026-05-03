@@ -21,11 +21,13 @@ object ProfileStateResolver {
             values = currentValues,
             profiles = displayProfiles,
             preferredId = state.selectedProfileId,
+            policies = state.policies,
         )
         val activeProfile = resolveProfileForValues(
             values = state.actualValues,
             profiles = displayProfiles,
             preferredId = state.selectedProfileId,
+            policies = state.policies,
         )
         val hasPolicies = state.policies.isNotEmpty()
 
@@ -70,17 +72,26 @@ object ProfileStateResolver {
         )
     }
 
-    fun matchesProfile(values: Map<Int, Int>, profile: PerformanceProfile): Boolean {
+    fun matchesProfile(
+        values: Map<Int, Int>,
+        profile: PerformanceProfile,
+        policies: List<CpuPolicyInfo> = emptyList(),
+    ): Boolean {
+        val policiesById = policies.associateBy { it.id }
         return profile.maxFrequencies.isNotEmpty() && profile.maxFrequencies.all { (policyId, value) ->
-            values[policyId] == value
+            val actual = values[policyId] ?: return@all false
+            if (actual == value) return@all true
+            if (profile.id != STOCK_PROFILE_ID) return@all false
+            val policy = policiesById[policyId] ?: return@all false
+            actual > value && actual <= policy.hardwareMaxFreq
         }
     }
 
     fun preferredProfileForCurrentValues(state: TunerState): PerformanceProfile? {
         return state.displayProfiles.firstOrNull { profile ->
-            profile.id == state.selectedDisplayProfileId && matchesProfile(state.currentValues, profile)
+            profile.id == state.selectedDisplayProfileId && matchesProfile(state.currentValues, profile, state.policies)
         } ?: state.displayProfiles.firstOrNull { profile ->
-            matchesProfile(state.currentValues, profile)
+            matchesProfile(state.currentValues, profile, state.policies)
         }
     }
 
@@ -101,12 +112,13 @@ object ProfileStateResolver {
         values: Map<Int, Int>,
         profiles: List<PerformanceProfile>,
         preferredId: String?,
+        policies: List<CpuPolicyInfo>,
     ): PerformanceProfile? {
         if (values.isEmpty()) return null
         val preferred = preferredId?.let { id -> profiles.firstOrNull { it.id == id } }
-        if (preferred != null && matchesProfile(values, preferred)) {
+        if (preferred != null && matchesProfile(values, preferred, policies)) {
             return preferred
         }
-        return profiles.firstOrNull { matchesProfile(values, it) }
+        return profiles.firstOrNull { matchesProfile(values, it, policies) }
     }
 }

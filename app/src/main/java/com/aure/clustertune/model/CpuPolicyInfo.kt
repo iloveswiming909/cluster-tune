@@ -6,6 +6,7 @@ data class CpuPolicyInfo(
     val scalingMaxPath: String,
     val currentMaxFreq: Int,
     val stockMaxFreq: Int,
+    val hardwareMaxFreq: Int,
     val minFreq: Int,
     val supportedFrequencies: List<Int>,
     val cpuIds: List<Int> = listOf(id),

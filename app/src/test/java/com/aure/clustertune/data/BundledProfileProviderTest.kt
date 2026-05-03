@@ -120,6 +120,7 @@ class BundledProfileProviderTest {
         scalingMaxPath = "/sys/devices/system/cpu/cpufreq/policy$id/scaling_max_freq",
         currentMaxFreq = stockMax,
         stockMaxFreq = stockMax,
+        hardwareMaxFreq = stockMax,
         minFreq = supported.first(),
         supportedFrequencies = supported,
     )

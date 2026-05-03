@@ -37,12 +37,13 @@ class CpuPolicyDetectorTest {
         assertEquals(listOf(0, 6), result.map { it.id })
         assertEquals(listOf(0, 1, 2, 3, 4, 5), result.first().cpuIds)
         assertEquals(listOf(6, 7), result.last().cpuIds)
-        assertEquals(listOf(998400, 1785600, 2227200, 2745600, 3532800), result.first().supportedFrequencies)
-        assertEquals(4320000, result.last().stockMaxFreq)
+        assertEquals(listOf(998400, 1785600, 2227200, 2745600), result.first().supportedFrequencies)
+        assertEquals(3072000, result.last().stockMaxFreq)
+        assertEquals(4320000, result.last().hardwareMaxFreq)
     }
 
     @Test
-    fun `appends extra top bin when max values exceed available frequencies`() {
+    fun `keeps hidden max values out of selectable frequencies`() {
         val fileSystem = FakeSysfsFileSystem(
             directories = listOf("/sys/devices/system/cpu/cpufreq/policy3"),
             files = mapOf(
@@ -50,6 +51,7 @@ class CpuPolicyDetectorTest {
                 "/sys/devices/system/cpu/cpufreq/policy3/cpuinfo_max_freq" to "2956800",
                 "/sys/devices/system/cpu/cpufreq/policy3/scaling_min_freq" to "710400",
                 "/sys/devices/system/cpu/cpufreq/policy3/scaling_available_frequencies" to "710400 940800 1209600 1420800 1785600 2150400",
+                "/sys/devices/system/cpu/cpufreq/policy3/stats/time_in_state" to "710400 1\n2956800 5\n",
             ),
         )
 
@@ -61,10 +63,11 @@ class CpuPolicyDetectorTest {
         val result = detector.detectPolicies().single()
 
         assertEquals(
-            listOf(710400, 940800, 1209600, 1420800, 1785600, 2150400, 2841600, 2956800),
+            listOf(710400, 940800, 1209600, 1420800, 1785600, 2150400),
             result.supportedFrequencies,
         )
-        assertEquals(2_956_800, result.stockMaxFreq)
+        assertEquals(2_150_400, result.stockMaxFreq)
+        assertEquals(2_956_800, result.hardwareMaxFreq)
         assertEquals(2_841_600, result.currentMaxFreq)
     }
 
@@ -164,9 +167,11 @@ class CpuPolicyDetectorTest {
 
         assertEquals(1_958_400, result.minFreq)
         assertEquals(
-            listOf(1017600, 1209600, 1401600, 1689600, 1958400, 2246400, 2438400, 4320000),
+            listOf(1017600, 1209600, 1401600, 1689600, 1958400, 2246400, 2438400),
             result.supportedFrequencies,
         )
+        assertEquals(2_438_400, result.stockMaxFreq)
+        assertEquals(4_320_000, result.hardwareMaxFreq)
     }
 
     @Test

@@ -49,12 +49,52 @@ class ProfileStateResolverTest {
         assertEquals("Manual", state.activeDisplayProfileName)
     }
 
-    private fun policy(id: Int, current: Int, stock: Int, supported: List<Int>) = CpuPolicyInfo(
+    @Test
+    fun `resolves stock when actual values are hidden boost bins above selectable stock`() {
+        val policies = listOf(
+            policy(
+                id = 3,
+                current = 2_803_200,
+                stock = 2_707_200,
+                hardware = 2_803_200,
+                supported = listOf(499_200, 1_920_000, 2_707_200),
+            ),
+            policy(
+                id = 7,
+                current = 3_187_200,
+                stock = 2_956_800,
+                hardware = 3_187_200,
+                supported = listOf(595_200, 2_092_800, 2_956_800),
+            ),
+        )
+
+        val state = ProfileStateResolver.resolve(
+            TunerState(
+                isLoading = false,
+                policies = policies,
+                actualValues = policies.associate { it.id to it.currentMaxFreq },
+                currentValues = policies.associate { it.id to it.stockMaxFreq },
+                stockValues = policies.associate { it.id to it.stockMaxFreq },
+            ),
+        )
+
+        assertEquals(ProfileStateResolver.STOCK_PROFILE_ID, state.activeDisplayProfileId)
+        assertEquals("Stock", state.activeDisplayProfileName)
+    }
+
+    private fun policy(
+        id: Int,
+        current: Int,
+        stock: Int,
+        supported: List<Int>,
+        hardware: Int = stock,
+    ) = CpuPolicyInfo(
         id = id,
         policyPath = "/sys/devices/system/cpu/cpufreq/policy$id",
         scalingMaxPath = "/sys/devices/system/cpu/cpufreq/policy$id/scaling_max_freq",
         currentMaxFreq = current,
         stockMaxFreq = stock,
+        hardwareMaxFreq = hardware,
         minFreq = supported.first(),
         supportedFrequencies = supported,
     )
