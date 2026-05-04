@@ -41,6 +41,11 @@ class PerformanceRepository(
     private val commandBuilder: PerformanceCommandBuilder,
     private val rootCommandRunner: RootCommandRunner,
 ) {
+    companion object {
+        @Volatile
+        private var processCachedPolicies: List<CpuPolicyInfo> = emptyList()
+    }
+
     data class ApplyOutcome(
         val actualValues: Map<Int, Int>,
         val verificationPassed: Boolean,
@@ -48,7 +53,6 @@ class PerformanceRepository(
     )
 
     private val liveRefreshToken = MutableStateFlow(0)
-    private var cachedPolicies: List<CpuPolicyInfo> = emptyList()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeState(): Flow<TunerState> {
@@ -84,9 +88,10 @@ class PerformanceRepository(
             completeStorageState,
         ) { _, storage -> storage }
             .transformLatest { storage ->
+                val cachedPolicies = processCachedPolicies
                 val policies = if (cachedPolicies.isEmpty()) {
                     detector.detectPolicies().also { detectedPolicies ->
-                        cachedPolicies = detectedPolicies
+                        processCachedPolicies = detectedPolicies
                     }
                 } else {
                     val liveValues = detector.readCurrentMaxValues(cachedPolicies)

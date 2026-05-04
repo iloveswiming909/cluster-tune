@@ -6,10 +6,13 @@ import java.io.InputStreamReader
 
 open class SocDetector {
 
-    private var cachedSocModel: String? = null
+    companion object {
+        @Volatile
+        private var processCachedSocModel: String? = null
+    }
 
     open fun detectSocModel(): String? {
-        cachedSocModel?.let { return it }
+        processCachedSocModel?.let { return it }
         val candidates = listOf(
             readProperty("ro.soc.model"),
             readProperty("ro.vendor.qti.soc_model"),
@@ -20,7 +23,7 @@ open class SocDetector {
         )
         return candidates.firstOrNull { !it.isNullOrBlank() }
             ?.trim()
-            ?.also { cachedSocModel = it }
+            ?.also { processCachedSocModel = it }
     }
 
     private fun readProperty(name: String): String? {
