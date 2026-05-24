@@ -3,7 +3,6 @@ package com.aure.clustertune.root
 import android.annotation.SuppressLint
 import android.os.IBinder
 import android.os.Parcel
-import android.util.Log
 import java.nio.charset.Charset
 
 @SuppressLint("DiscouragedPrivateApi", "PrivateApi")
@@ -21,17 +20,6 @@ class RootExec {
             pServerAvailable = true
             rawBinder
         }.getOrDefault(null)
-
-        // One-shot diagnostic: probe every plausible PServer protocol
-        // shape against a canary echo command and log the outcomes.
-        // Runs only when the binder was obtained successfully.
-        binder?.let { b ->
-            try {
-                PServerProbe.run(b)
-            } catch (t: Throwable) {
-                Log.w("ClusterTuneProbe", "Probe threw at top level", t)
-            }
-        }
     }
 
     fun executeAsRoot(cmd: String): Result<String?> {
@@ -41,14 +29,7 @@ class RootExec {
         val reply = Parcel.obtain()
         return try {
             data.writeStringArray(arrayOf(cmd, "1"))
-            val ok = binder.transact(0, data, reply, 0)
-            // Log the transact return + reply size for every real call too —
-            // this was the missing piece in the previous round of
-            // diagnostics. Tag matches the rest of the detection logging.
-            Log.d(
-                "ClusterTune",
-                "executeAsRoot('${cmd.take(60)}${if (cmd.length > 60) "..." else ""}'): transact=$ok, reply.dataSize=${reply.dataSize()}",
-            )
+            binder.transact(0, data, reply, 0)
             Result.success(decodeReply(reply))
         } catch (throwable: Throwable) {
             Result.failure(throwable)

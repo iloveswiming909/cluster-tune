@@ -2,6 +2,7 @@ package com.aure.clustertune.data
 
 import android.util.Log
 import com.aure.clustertune.model.CpuPolicyInfo
+import java.io.File
 
 class CpuPolicyDetector(
     private val fileSystem: SysfsFileSystem = RealSysfsFileSystem(),
@@ -114,11 +115,38 @@ class CpuPolicyDetector(
         return values.filterNotNull().maxOrNull()
     }
 
+    /**
+     * Reads a sysfs file. On the Odin 2 Mini, PServer accepts transactions
+     * but its reply payload is always empty for `cat` commands — the
+     * stdout-forwarding is broken in the firmware's pservice binary.
+     * Fortunately the per-policy sysfs files we need for detection
+     * (scaling_max_freq, cpuinfo_max_freq, scaling_available_frequencies,
+     * affected_cpus, etc.) are world-readable via plain File I/O under
+     * the standard untrusted_app sepolicy, so we try a direct read first
+     * and fall back to PServer only if the direct read fails (which is
+     * the path that works on the Odin 3, where the privileged reader's
+     * stdout forwarding is functional).
+     *
+     * Writes still need PServer (the files are root-write-only) — that
+     * is handled separately in PerformanceCommandBuilder/RootExec.
+     */
     private fun readText(path: String): String? {
-        return privilegedReader
+        val direct = runCatching {
+            File(path).readText().trim().takeIf { it.isNotEmpty() }
+        }.getOrNull()
+        if (direct != null) {
+            Log.d(LOG_TAG, "readText($path) -> direct File.readText: ${direct.length} chars")
+            return direct
+        }
+        val privileged = privilegedReader
             .readText(path)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+        Log.d(
+            LOG_TAG,
+            "readText($path) -> direct=null, privileged=${if (privileged == null) "null" else privileged.length.toString() + " chars"}",
+        )
+        return privileged
     }
 
     private fun policyIdOrMax(policyPath: String): Int {
