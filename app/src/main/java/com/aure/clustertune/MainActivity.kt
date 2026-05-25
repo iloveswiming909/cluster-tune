@@ -19,6 +19,7 @@ import com.aure.clustertune.tile.QuickSettingsTileAddResult
 import com.aure.clustertune.tile.QuickSettingsTilePrompt
 import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import com.aure.clustertune.ui.MainTunerScreen
+import com.aure.clustertune.ui.OdinHandoffDialog
 import com.aure.clustertune.ui.SettingsScreen
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
         TunerViewModel.factory(
             repository = container.repository,
             settingsStorage = container.settingsStorage,
+            odinScriptHandoff = container.odinScriptHandoff,
         )
     }
     private val exportProfilesLauncher = registerForActivityResult(
@@ -100,10 +102,26 @@ class MainActivity : ComponentActivity() {
                             onStatusMessageShown = viewModel::consumeStatusMessage,
                             onErrorMessageShown = viewModel::consumeErrorMessage,
                         )
+                        val handoffRequest = viewModel.handoffRequestFlow.collectAsStateWithLifecycle().value
+                        if (handoffRequest != null) {
+                            OdinHandoffDialog(
+                                request = handoffRequest,
+                                onOpenSettings = viewModel::confirmHandoff,
+                                onDismiss = viewModel::dismissHandoff,
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // If the user just returned from Odin Settings after we handed
+        // off a script for the Mini workaround, re-read sysfs and
+        // produce a final success/failure toast.
+        viewModel.verifyAfterHandoff()
     }
 
     private fun maybeRequestQuickSettingsTileOnFirstRun() {

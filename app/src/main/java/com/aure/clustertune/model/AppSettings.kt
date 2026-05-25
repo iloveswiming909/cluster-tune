@@ -18,4 +18,10 @@ data class AppSettings(
     val applyLastProfileOnBoot: Boolean = false,
     val hasPromptedQuickSettingsTile: Boolean = false,
     val isQuickSettingsTileAdded: Boolean = false,
+    /**
+     * Set the first time the Mini handoff dialog is shown, after which
+     * the longer tutorial is replaced with the shorter dialog body on
+     * subsequent uses.
+     */
+    val hasSeenOdinHandoffTutorial: Boolean = false,
 )

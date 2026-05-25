@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.SettingsStorage
+import com.aure.clustertune.root.OdinScriptHandoff
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
 import com.aure.clustertune.model.CpuPolicyInfo
@@ -24,7 +25,25 @@ import kotlin.math.abs
 class TunerViewModel(
     private val repository: PerformanceRepository,
     private val settingsStorage: SettingsStorage,
+    private val odinScriptHandoff: OdinScriptHandoff,
 ) : ViewModel() {
+
+    /**
+     * State surfaced to the UI when the standard PServer apply path
+     * failed verification (or threw) and the device has Odin Settings
+     * available as a fallback. The UI shows a handoff dialog and, if
+     * the user accepts, the user is taken to Odin Settings to run the
+     * script through "Run script as root".
+     */
+    data class HandoffRequest(
+        val scriptPath: String,
+        val userVisiblePath: String,
+        val showTutorial: Boolean,
+        val profileName: String,
+    )
+
+    private val handoffRequest = MutableStateFlow<HandoffRequest?>(null)
+    val handoffRequestFlow: StateFlow<HandoffRequest?> = handoffRequest
 
     private val edits = MutableStateFlow<Map<Int, Int>>(emptyMap())
     private val transientMessage = MutableStateFlow<String?>(null)
@@ -105,6 +124,7 @@ class TunerViewModel(
 
         viewModelScope.launch {
             val appliedProfile = ProfileStateResolver.preferredProfileForCurrentValues(state)
+            val profileName = appliedProfile?.name ?: "Manual"
             val applyResult = repository.applyValues(
                 policies = state.policies,
                 selectedValues = state.currentValues,
@@ -113,18 +133,100 @@ class TunerViewModel(
             )
             applyResult.onSuccess { outcome ->
                 edits.value = emptyMap()
-                transientMessage.value = if (outcome.verificationPassed) {
-                    buildAppliedMessage(appliedProfile, outcome.commandOutput)
+                if (outcome.verificationPassed) {
+                    transientMessage.value = buildAppliedMessage(appliedProfile, outcome.commandOutput)
+                    transientError.value = null
                 } else {
-                    buildVerificationFailureMessage(state, outcome.actualValues, outcome.commandOutput)
+                    // Verification failed. If Odin Settings is available, offer
+                    // the script-handoff fallback. Otherwise just surface the
+                    // failure message the way the upstream code did.
+                    if (odinScriptHandoff.isAvailable) {
+                        val scriptPath = odinScriptHandoff.writeScript(outcome.appliedScript)
+                        if (scriptPath != null) {
+                            val hasSeenTutorial = settings.value.hasSeenOdinHandoffTutorial
+                            handoffRequest.value = HandoffRequest(
+                                scriptPath = scriptPath,
+                                userVisiblePath = OdinScriptHandoff.USER_VISIBLE_PATH,
+                                showTutorial = !hasSeenTutorial,
+                                profileName = profileName,
+                            )
+                            transientMessage.value = null
+                            transientError.value = null
+                        } else {
+                            transientMessage.value =
+                                buildVerificationFailureMessage(state, outcome.actualValues, outcome.commandOutput)
+                            transientError.value = null
+                        }
+                    } else {
+                        transientMessage.value =
+                            buildVerificationFailureMessage(state, outcome.actualValues, outcome.commandOutput)
+                        transientError.value = null
+                    }
                 }
-                transientError.value = null
             }.onFailure { throwable ->
                 transientError.value = throwable.message ?: "Failed to apply limits"
             }
-            if (applyResult.isSuccess) {
+            if (applyResult.isSuccess && applyResult.getOrNull()?.verificationPassed == true) {
                 repository.selectProfile(appliedProfile?.id?.takeUnless { it == ProfileStateResolver.STOCK_PROFILE_ID })
-                onApplied(appliedProfile?.name ?: "Manual")
+                onApplied(profileName)
+            }
+        }
+    }
+
+    /**
+     * Called when the user taps "Open Odin Settings" in the handoff
+     * dialog. Marks the tutorial as seen, launches Odin Settings, and
+     * clears the pending handoff state.
+     */
+    fun confirmHandoff() {
+        viewModelScope.launch {
+            settingsStorage.persistOdinHandoffTutorialSeen()
+        }
+        odinScriptHandoff.launchOdinSettings()
+        handoffRequest.value = null
+    }
+
+    /**
+     * Called when the user cancels the handoff dialog. We still mark
+     * the tutorial as seen so we don't replay the long form again next
+     * time, and we surface the original verification-failure toast so
+     * the user has feedback that the apply didn't land.
+     */
+    fun dismissHandoff() {
+        viewModelScope.launch {
+            settingsStorage.persistOdinHandoffTutorialSeen()
+        }
+        val previous = handoffRequest.value
+        handoffRequest.value = null
+        if (previous != null) {
+            transientMessage.value = "Apply not completed. Tap a preset and try again."
+        }
+    }
+
+    /**
+     * Called from the activity's onResume after the user returned from
+     * Odin Settings. Re-reads sysfs and produces a final success/failure
+     * toast. Safe to call any time; no-op if no handoff is pending.
+     */
+    fun verifyAfterHandoff() {
+        val current = state.value
+        if (current.policies.isEmpty()) return
+        viewModelScope.launch {
+            repository.refreshLiveValues()
+            // Compare what the user had selected against what is now live.
+            val mismatches = current.policies.mapNotNull { policy ->
+                val requested = current.currentValues[policy.id] ?: return@mapNotNull null
+                val actual = current.actualValues[policy.id] ?: return@mapNotNull null
+                if (ProfileStateResolver.isPolicyValueSatisfied(
+                        policy = policy,
+                        requestedValue = requested,
+                        actualValue = actual,
+                    )) null else policy.id
+            }
+            transientMessage.value = if (mismatches.isEmpty()) {
+                "Underclock applied via Odin Settings"
+            } else {
+                "Apply did not land; check Odin Settings ran the script"
             }
         }
     }
@@ -277,11 +379,12 @@ class TunerViewModel(
         fun factory(
             repository: PerformanceRepository,
             settingsStorage: SettingsStorage,
+            odinScriptHandoff: OdinScriptHandoff,
         ): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TunerViewModel(repository, settingsStorage) as T
+                    return TunerViewModel(repository, settingsStorage, odinScriptHandoff) as T
                 }
             }
         }

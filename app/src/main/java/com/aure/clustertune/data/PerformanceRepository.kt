@@ -50,6 +50,14 @@ class PerformanceRepository(
         val actualValues: Map<Int, Int>,
         val verificationPassed: Boolean,
         val commandOutput: String?,
+        /**
+         * The exact apply script that was sent to the root channel.
+         * Retained so the UI can hand it off to an alternative root
+         * mechanism (e.g. Odin Settings' "Run script as root") when
+         * verification fails on devices where the standard PServer
+         * channel does not actually land the writes.
+         */
+        val appliedScript: String,
     )
 
     private val liveRefreshToken = MutableStateFlow(0)
@@ -167,7 +175,28 @@ class PerformanceRepository(
     ): Result<ApplyOutcome> {
         val filtered = selectedValues.filterKeys { policyId -> policies.any { it.id == policyId } }
         val script = commandBuilder.buildApplyScript(policies, filtered, isReset)
-        return rootCommandRunner.executeScript(script).mapCatching { output ->
+        // The script execution may legitimately throw on devices where
+        // the PServer channel is unreliable (Odin 2 Mini under sustained
+        // use). To allow the UI to offer the script-handoff fallback in
+        // those cases, we catch the failure here and return a non-throwing
+        // ApplyOutcome with verificationPassed=false, so the caller can
+        // act on the failure WITH the script in hand instead of needing
+        // to regenerate it.
+        val executionResult = rootCommandRunner.executeScript(script)
+        val commandOutput = executionResult.getOrNull()
+        if (executionResult.isFailure) {
+            val actualValues = detector.readCurrentMaxValues(policies)
+            return Result.success(
+                ApplyOutcome(
+                    actualValues = actualValues,
+                    verificationPassed = false,
+                    commandOutput = executionResult.exceptionOrNull()
+                        ?.let { "channel error: ${it.javaClass.simpleName}: ${it.message}" },
+                    appliedScript = script,
+                )
+            )
+        }
+        return runCatching {
             profileStorage.persistLastValues(filtered)
             profileStorage.persistLastAppliedDisplayProfile(appliedDisplayProfileId)
             val actualValues = detector.readCurrentMaxValues(policies)
@@ -183,7 +212,8 @@ class PerformanceRepository(
                         actualValue = actualValue,
                     )
                 },
-                commandOutput = output,
+                commandOutput = commandOutput,
+                appliedScript = script,
             )
         }
     }

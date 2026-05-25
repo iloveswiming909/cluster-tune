@@ -1,6 +1,5 @@
 package com.aure.clustertune.data
 
-import android.util.Log
 import com.aure.clustertune.model.CpuPolicyInfo
 import java.io.File
 
@@ -11,13 +10,10 @@ class CpuPolicyDetector(
 ) {
     fun detectPolicies(): List<CpuPolicyInfo> {
         val directories = fileSystem.listPolicyDirectories(policyRoot)
-        Log.d(LOG_TAG, "Listing of $policyRoot -> ${directories.size} entries: $directories")
-        val policies = directories
+        return directories
             .sortedBy(::policyIdOrMax)
             .mapNotNull(::parsePolicy)
             .sortedBy { it.id }
-        Log.d(LOG_TAG, "detectPolicies finished: ${policies.size} policies parsed (ids=${policies.map { it.id }})")
-        return policies
     }
 
     fun readCurrentMaxValues(policies: List<CpuPolicyInfo>): Map<Int, Int> {
@@ -47,10 +43,7 @@ class CpuPolicyDetector(
                 currentMaxFreq = scalingMax ?: cpuInfoMax ?: 0,
             )
         }
-        val selectableMax = supported.lastOrNull() ?: maxOfNotNull(scalingMax, cpuInfoMax) ?: run {
-            Log.d(LOG_TAG, "policy$id rejected: no usable max frequency from any source")
-            return null
-        }
+        val selectableMax = supported.lastOrNull() ?: maxOfNotNull(scalingMax, cpuInfoMax) ?: return null
         val observedMax = maxOfNotNull(cpuInfoMax, scalingMax, timeInStateMax, selectableMax) ?: selectableMax
         val currentMax = scalingMax ?: supported.lastOrNull() ?: cpuInfoMax ?: selectableMax
 
@@ -110,6 +103,17 @@ class CpuPolicyDetector(
         return values.filterNotNull().maxOrNull()
     }
 
+    /**
+     * Reads a sysfs file. On the Odin 2 Mini, PServer accepts binder
+     * transactions but its reply payload is always empty for `cat`
+     * commands — stdout forwarding is broken in the firmware's pservice
+     * binary. The per-policy cpufreq nodes used for detection
+     * (scaling_max_freq, cpuinfo_max_freq, etc.) are world-readable via
+     * plain File I/O under the standard untrusted_app sepolicy, so we
+     * try a direct read first and fall back to PServer only if the
+     * direct read fails (which is the path that works on devices where
+     * the privileged reader's stdout forwarding is functional).
+     */
     private fun readText(path: String): String? {
         val direct = runCatching {
             File(path).readText().trim().takeIf { it.isNotEmpty() }
@@ -123,9 +127,5 @@ class CpuPolicyDetector(
 
     private fun policyIdOrMax(policyPath: String): Int {
         return policyPath.substringAfterLast('/').removePrefix("policy").toIntOrNull() ?: Int.MAX_VALUE
-    }
-
-    private companion object {
-        const val LOG_TAG = "ClusterTune"
     }
 }

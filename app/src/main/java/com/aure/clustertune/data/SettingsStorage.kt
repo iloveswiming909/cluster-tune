@@ -22,6 +22,7 @@ class SettingsStorage(private val context: Context) {
     private val quickSettingsTileAddedKey = booleanPreferencesKey("quick_settings_tile_added")
     private val colorSourceKey = stringPreferencesKey("color_source")
     private val accentColorKey = intPreferencesKey("accent_color")
+    private val odinHandoffTutorialSeenKey = booleanPreferencesKey("odin_handoff_tutorial_seen")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
         AppSettings(
@@ -35,6 +36,7 @@ class SettingsStorage(private val context: Context) {
             applyLastProfileOnBoot = preferences[applyLastProfileOnBootKey] ?: false,
             hasPromptedQuickSettingsTile = preferences[quickSettingsTilePromptShownKey] ?: false,
             isQuickSettingsTileAdded = preferences[quickSettingsTileAddedKey] ?: false,
+            hasSeenOdinHandoffTutorial = preferences[odinHandoffTutorialSeenKey] ?: false,
         )
     }
 
@@ -71,6 +73,12 @@ class SettingsStorage(private val context: Context) {
     suspend fun persistAccentColor(accentColor: Int) {
         context.settingsDataStore.edit { preferences ->
             preferences[accentColorKey] = accentColor
+        }
+    }
+
+    suspend fun persistOdinHandoffTutorialSeen() {
+        context.settingsDataStore.edit { preferences ->
+            preferences[odinHandoffTutorialSeenKey] = true
         }
     }
 
