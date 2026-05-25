@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.os.Environment
 import android.util.Log
 import java.io.File
@@ -81,6 +82,21 @@ class OdinScriptHandoff(private val context: Context) {
                     "(${scriptContents.length} bytes, exists=${file.exists()}, " +
                     "canRead=${file.canRead()}, canExec=${file.canExecute()})",
             )
+            // Ask MediaScanner to index the file so it also appears when
+            // the user browses Documents via the chip-shortcut view in
+            // Android's Files app (the root-storage browser already
+            // shows it via the regular filesystem listing, but the
+            // chips query MediaStore and would miss our file otherwise).
+            try {
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(file.absolutePath),
+                    arrayOf("application/x-sh"),
+                    null,
+                )
+            } catch (throwable: Throwable) {
+                Log.d(TAG, "MediaScanner request failed (non-fatal)", throwable)
+            }
             file.absolutePath
         }.onFailure { throwable ->
             Log.w(TAG, "Failed to write handoff script", throwable)

@@ -197,9 +197,10 @@ private fun tutorialPages(userVisiblePath: String): List<TutorialPage> {
         ),
         TutorialPage(
             title = "Pick clustertune-apply.sh",
-            body = "Open Documents, then the ClusterScripts folder, then pick " +
-                "clustertune-apply.sh. The file picker may remember this folder " +
-                "after the first time.",
+            body = "From the file picker, tap the menu icon at the top left, then " +
+                "tap your device name (Odin2 Mini) to browse storage from the root. " +
+                "Open Documents, then the ClusterScripts folder, then pick " +
+                "clustertune-apply.sh.",
             imageRes = R.drawable.tutorial_file_picker,
             pathHighlight = userVisiblePath,
         ),
