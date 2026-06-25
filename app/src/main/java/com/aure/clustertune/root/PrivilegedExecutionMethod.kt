@@ -29,9 +29,12 @@ interface PrivilegedExecutionMethod {
 
 class PrivilegedExecutionResolver(
     private val methods: List<PrivilegedExecutionMethod>,
+    private val autoDetectionOrder: List<String> = DEFAULT_AUTO_DETECTION_ORDER,
 ) {
     private var cachedMethod: PrivilegedExecutionMethod? = null
     private var cachedProbe: ExecutionProbeResult? = null
+    @Volatile
+    private var configuredMethodId: String? = null
 
     val isAvailable: Boolean
         get() = selectedMethod() != null
@@ -39,13 +42,50 @@ class PrivilegedExecutionResolver(
     val selectedMethodId: String?
         get() = selectedMethod()?.id
 
+    val availableMethodIds: List<String>
+        get() = methods.map { it.id }
+
+    fun setConfiguredMethodId(methodId: String?) {
+        if (configuredMethodId == methodId) return
+        configuredMethodId = methodId
+        cachedMethod = null
+        cachedProbe = null
+    }
+
+    fun autoDetectBestMethod(forceReprobe: Boolean = true): String? {
+        val method = selectBestMethod(forceReprobe = forceReprobe)
+        setConfiguredMethodId(method?.id)
+        return method?.id
+    }
+
     fun selectedMethod(forceReprobe: Boolean = false): PrivilegedExecutionMethod? {
         if (!forceReprobe) {
             cachedMethod?.let { return it }
         }
         cachedMethod = null
         cachedProbe = null
-        methods.forEach { method ->
+
+        val configuredId = configuredMethodId
+        if (configuredId != null) {
+            val configuredMethod = methods.firstOrNull { method -> method.id == configuredId }
+            val configuredProbe = configuredMethod?.probe()
+            if (configuredMethod != null && configuredProbe?.isAvailable == true) {
+                cachedMethod = configuredMethod
+                cachedProbe = configuredProbe
+                return configuredMethod
+            }
+        }
+
+        return selectBestMethod(forceReprobe = true)
+    }
+
+    private fun selectBestMethod(forceReprobe: Boolean): PrivilegedExecutionMethod? {
+        if (!forceReprobe) {
+            cachedMethod?.let { return it }
+        }
+        cachedMethod = null
+        cachedProbe = null
+        orderedMethods().forEach { method ->
             val probe = method.probe()
             if (probe.isAvailable) {
                 cachedMethod = method
@@ -54,6 +94,12 @@ class PrivilegedExecutionResolver(
             }
         }
         return null
+    }
+
+    private fun orderedMethods(): List<PrivilegedExecutionMethod> {
+        val byId = methods.associateBy { it.id }
+        val ordered = autoDetectionOrder.mapNotNull(byId::get)
+        return ordered + methods.filterNot { method -> method.id in autoDetectionOrder }
     }
 
     fun executeScript(
@@ -70,6 +116,13 @@ class PrivilegedExecutionResolver(
     }
 
     companion object {
+        val DEFAULT_AUTO_DETECTION_ORDER = listOf(
+            "pserver-stdout",
+            "shizuku",
+            "pserver-file-output",
+            "root-shell",
+        )
+
         fun default(context: Context): PrivilegedExecutionResolver {
             val rootExec = RootExec()
             return PrivilegedExecutionResolver(

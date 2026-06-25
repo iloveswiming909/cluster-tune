@@ -28,6 +28,7 @@ class SettingsStorage(private val context: Context) {
     private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
     private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
     private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
+    private val privilegedExecutionMethodIdKey = stringPreferencesKey("privileged_execution_method_id")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
         AppSettings(
@@ -46,6 +47,7 @@ class SettingsStorage(private val context: Context) {
             automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
             updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
             lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
+            privilegedExecutionMethodId = preferences[privilegedExecutionMethodIdKey],
         )
     }
 
@@ -127,6 +129,16 @@ class SettingsStorage(private val context: Context) {
     suspend fun persistLastUpdateCheckMillis(timestampMillis: Long) {
         context.settingsDataStore.edit { preferences ->
             preferences[lastUpdateCheckMillisKey] = timestampMillis
+        }
+    }
+
+    suspend fun persistPrivilegedExecutionMethodId(methodId: String?) {
+        context.settingsDataStore.edit { preferences ->
+            if (methodId == null) {
+                preferences.remove(privilegedExecutionMethodIdKey)
+            } else {
+                preferences[privilegedExecutionMethodIdKey] = methodId
+            }
         }
     }
 

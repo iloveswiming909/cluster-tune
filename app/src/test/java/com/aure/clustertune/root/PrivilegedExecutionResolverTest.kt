@@ -24,7 +24,10 @@ class PrivilegedExecutionResolverTest {
             id = "pserver-file-output",
             probeResult = ExecutionProbeResult(true, false),
         )
-        val resolver = PrivilegedExecutionResolver(listOf(unavailable, pserver, fallback))
+        val resolver = PrivilegedExecutionResolver(
+            methods = listOf(unavailable, pserver, fallback),
+            autoDetectionOrder = listOf("unavailable", "pserver-stdout", "pserver-file-output"),
+        )
 
         assertTrue(resolver.isAvailable)
         assertEquals("pserver-stdout", resolver.selectedMethodId)
@@ -71,6 +74,30 @@ class PrivilegedExecutionResolverTest {
     fun `shell quotes paths with single quotes`() {
         assertEquals("'/sys/path'", shellQuote("/sys/path"))
         assertEquals("'/data/a'\\''b'", shellQuote("/data/a'b"))
+    }
+
+    @Test
+    fun `configured method wins over auto detection order`() {
+        val pserver = FakeExecutionMethod("pserver-stdout", ExecutionProbeResult(true, true))
+        val shizuku = FakeExecutionMethod("shizuku", ExecutionProbeResult(true, true))
+        val resolver = PrivilegedExecutionResolver(listOf(pserver, shizuku))
+
+        resolver.setConfiguredMethodId("shizuku")
+
+        assertEquals("shizuku", resolver.selectedMethodId)
+        assertEquals(0, pserver.probeCount)
+        assertEquals(1, shizuku.probeCount)
+    }
+
+    @Test
+    fun `auto detect persists best available method`() {
+        val pserver = FakeExecutionMethod("pserver-stdout", ExecutionProbeResult(false, false))
+        val shizuku = FakeExecutionMethod("shizuku", ExecutionProbeResult(true, true))
+        val rootShell = FakeExecutionMethod("root-shell", ExecutionProbeResult(true, true))
+        val resolver = PrivilegedExecutionResolver(listOf(rootShell, shizuku, pserver))
+
+        assertEquals("shizuku", resolver.autoDetectBestMethod())
+        assertEquals("shizuku", resolver.selectedMethodId)
     }
 
     private class FakeExecutionMethod(

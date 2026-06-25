@@ -23,4 +23,5 @@ data class AppSettings(
     val automaticUpdateChecksEnabled: Boolean = true,
     val updateCheckIntervalDays: Int = 7,
     val lastUpdateCheckMillis: Long = 0L,
+    val privilegedExecutionMethodId: String? = null,
 )

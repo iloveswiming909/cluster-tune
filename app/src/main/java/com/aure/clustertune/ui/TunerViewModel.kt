@@ -13,6 +13,7 @@ import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
 import com.aure.clustertune.model.TileInteractionBehavior
 import com.aure.clustertune.model.TunerState
+import com.aure.clustertune.root.PrivilegedExecutionResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +25,7 @@ import kotlin.math.abs
 class TunerViewModel(
     private val repository: PerformanceRepository,
     private val settingsStorage: SettingsStorage,
+    private val privilegedExecutionResolver: PrivilegedExecutionResolver,
 ) : ViewModel() {
 
     private val edits = MutableStateFlow<Map<Int, Int>>(emptyMap())
@@ -257,6 +259,28 @@ class TunerViewModel(
         }
     }
 
+    fun setPrivilegedExecutionMethod(methodId: String?) {
+        viewModelScope.launch {
+            privilegedExecutionResolver.setConfiguredMethodId(methodId)
+            settingsStorage.persistPrivilegedExecutionMethodId(methodId)
+            transientMessage.value = methodId
+                ?.let { "Privileged method set to ${formatExecutionMethod(it)}" }
+                ?: "Privileged method set to automatic"
+            transientError.value = null
+        }
+    }
+
+    fun autoDetectPrivilegedExecutionMethod() {
+        viewModelScope.launch {
+            val methodId = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            settingsStorage.persistPrivilegedExecutionMethodId(methodId)
+            transientMessage.value = methodId
+                ?.let { "Using ${formatExecutionMethod(it)}" }
+                ?: "No privileged execution method is available"
+            transientError.value = null
+        }
+    }
+
     fun refreshLiveState() {
         repository.refreshLiveValues()
     }
@@ -305,15 +329,26 @@ class TunerViewModel(
         return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base
     }
 
+    private fun formatExecutionMethod(methodId: String): String {
+        return when (methodId) {
+            "pserver-stdout" -> "PServer"
+            "pserver-file-output" -> "PServer fallback"
+            "root-shell" -> "Root shell"
+            "shizuku" -> "Shizuku"
+            else -> methodId
+        }
+    }
+
     companion object {
         fun factory(
             repository: PerformanceRepository,
             settingsStorage: SettingsStorage,
+            privilegedExecutionResolver: PrivilegedExecutionResolver,
         ): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TunerViewModel(repository, settingsStorage) as T
+                    return TunerViewModel(repository, settingsStorage, privilegedExecutionResolver) as T
                 }
             }
         }

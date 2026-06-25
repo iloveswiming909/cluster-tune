@@ -54,6 +54,13 @@ private val accentColorOptions = listOf(
     0xFF9A4600.toInt(),
 )
 
+private val privilegedExecutionOptions = listOf(
+    "pserver-stdout",
+    "shizuku",
+    "pserver-file-output",
+    "root-shell",
+)
+
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
@@ -74,6 +81,8 @@ fun SettingsScreen(
     onCheckForUpdates: () -> Unit,
     onAutomaticUpdateChecksEnabledChange: (Boolean) -> Unit,
     onUpdateCheckIntervalDaysChange: (Int) -> Unit,
+    onPrivilegedExecutionMethodChange: (String?) -> Unit,
+    onAutoDetectPrivilegedExecutionMethod: () -> Unit,
     onRequestShizukuPermission: () -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
@@ -211,6 +220,35 @@ fun SettingsScreen(
         }
 
         SettingsSection(title = "Privileged access") {
+            SettingsControlGroup(label = "Execution method") {
+                PrivilegedExecutionMethodSelector(
+                    selectedMethodId = settings.privilegedExecutionMethodId,
+                    onChange = onPrivilegedExecutionMethodChange,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Auto detect best method",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Re-probes this device and updates the selected execution method.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TextButton(onClick = onAutoDetectPrivilegedExecutionMethod) {
+                    Text("Detect")
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -388,6 +426,59 @@ fun SettingsScreen(
                 }
             },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PrivilegedExecutionMethodSelector(
+    selectedMethodId: String?,
+    onChange: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = selectedMethodId?.let(::executionMethodLabel) ?: "Not detected yet"
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+            },
+            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+            singleLine = true,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            privilegedExecutionOptions.forEach { methodId ->
+                DropdownMenuItem(
+                    text = { Text(executionMethodLabel(methodId)) },
+                    onClick = {
+                        onChange(methodId)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun executionMethodLabel(methodId: String): String {
+    return when (methodId) {
+        "pserver-stdout" -> "PServer"
+        "pserver-file-output" -> "PServer fallback"
+        "root-shell" -> "Root shell"
+        "shizuku" -> "Shizuku"
+        else -> methodId
     }
 }
 

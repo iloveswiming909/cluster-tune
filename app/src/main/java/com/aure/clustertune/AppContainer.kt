@@ -11,15 +11,29 @@ import com.aure.clustertune.root.PerformanceCommandBuilder
 import com.aure.clustertune.root.PServerSysfsReader
 import com.aure.clustertune.root.PrivilegedExecutionResolver
 import com.aure.clustertune.root.RootCommandRunner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
-    private val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
         PrivilegedExecutionResolver.default(appContext)
     }
 
     val settingsStorage: SettingsStorage by lazy {
         SettingsStorage(appContext)
+    }
+
+    init {
+        appScope.launch {
+            settingsStorage.settings.collect { settings ->
+                privilegedExecutionResolver.setConfiguredMethodId(settings.privilegedExecutionMethodId)
+            }
+        }
     }
 
     val repository: PerformanceRepository by lazy {

@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         TunerViewModel.factory(
             repository = container.repository,
             settingsStorage = container.settingsStorage,
+            privilegedExecutionResolver = container.privilegedExecutionResolver,
         )
     }
     private val exportProfilesLauncher = registerForActivityResult(
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         maybeRequestQuickSettingsTileOnFirstRun()
+        maybeAutoDetectPrivilegedExecutionOnFirstRun()
         maybeCheckForUpdatesOnLaunch()
 
         setContent {
@@ -126,6 +128,8 @@ class MainActivity : ComponentActivity() {
                             onCheckForUpdates = { checkForUpdates(showUpToDateToast = true) },
                             onAutomaticUpdateChecksEnabledChange = viewModel::setAutomaticUpdateChecksEnabled,
                             onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
+                            onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
+                            onAutoDetectPrivilegedExecutionMethod = viewModel::autoDetectPrivilegedExecutionMethod,
                             onRequestShizukuPermission = ::requestShizukuPermission,
                         )
                     } else {
@@ -183,6 +187,16 @@ class MainActivity : ComponentActivity() {
             if (QuickSettingsTilePrompt.isSupported) {
                 requestQuickSettingsTile(showResultToast = false)
             }
+        }
+    }
+
+    private fun maybeAutoDetectPrivilegedExecutionOnFirstRun() {
+        lifecycleScope.launch {
+            val settings = container.settingsStorage.settings.first()
+            if (settings.privilegedExecutionMethodId != null) return@launch
+
+            val methodId = container.privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            container.settingsStorage.persistPrivilegedExecutionMethodId(methodId)
         }
     }
 
