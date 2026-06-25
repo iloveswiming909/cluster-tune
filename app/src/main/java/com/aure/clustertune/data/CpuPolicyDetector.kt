@@ -5,10 +5,15 @@ import com.aure.clustertune.model.CpuPolicyInfo
 class CpuPolicyDetector(
     private val fileSystem: SysfsFileSystem = RealSysfsFileSystem(),
     private val privilegedReader: PrivilegedSysfsReader,
+    private val privilegedLister: PrivilegedSysfsLister? = null,
     private val policyRoot: String = "/sys/devices/system/cpu/cpufreq",
 ) {
     fun detectPolicies(): List<CpuPolicyInfo> {
-        return fileSystem.listPolicyDirectories(policyRoot)
+        val unprivilegedDirectories = fileSystem.listPolicyDirectories(policyRoot)
+        val directories = unprivilegedDirectories.ifEmpty {
+            privilegedLister?.listChildrenWithPrefix(policyRoot, "policy").orEmpty()
+        }
+        return directories
             .sortedBy(::policyIdOrMax)
             .mapNotNull(::parsePolicy)
             .sortedBy { it.id }
@@ -102,6 +107,8 @@ class CpuPolicyDetector(
     }
 
     private fun readText(path: String): String? {
+        val direct = fileSystem.readText(path)?.trim()?.takeIf { it.isNotEmpty() }
+        if (direct != null) return direct
         return privilegedReader
             .readText(path)
             ?.trim()

@@ -4,6 +4,7 @@ import java.io.File
 
 interface SysfsFileSystem {
     fun listPolicyDirectories(root: String): List<String>
+    fun readText(path: String): String?
 }
 
 class RealSysfsFileSystem : SysfsFileSystem {
@@ -13,5 +14,11 @@ class RealSysfsFileSystem : SysfsFileSystem {
             ?.filter { it.isDirectory && it.name.startsWith("policy") }
             ?.map { it.absolutePath }
             .orEmpty()
+    }
+
+    override fun readText(path: String): String? {
+        return runCatching {
+            File(path).readText().trim().takeIf { it.isNotEmpty() }
+        }.getOrNull()
     }
 }
