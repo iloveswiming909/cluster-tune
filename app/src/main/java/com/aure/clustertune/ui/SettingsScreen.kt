@@ -71,6 +71,7 @@ fun SettingsScreen(
     onRequestAddQuickSettingsTile: () -> Unit,
     canRequestAddQuickSettingsTile: Boolean,
     isQuickSettingsTileAdded: Boolean,
+    onCheckForUpdates: () -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
 
@@ -106,6 +107,32 @@ fun SettingsScreen(
                 selectedAccentColor = settings.accentColor,
                 onAccentColorChange = onAccentColorChange,
             )
+        }
+
+        SettingsSection(title = "Updates") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Check GitHub releases",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Downloads the latest ClusterTune APK and opens Android's package installer.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TextButton(onClick = onCheckForUpdates) {
+                    Text("Check")
+                }
+            }
         }
 
         SettingsSection(title = "Quick Settings Tile") {

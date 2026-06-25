@@ -27,12 +27,16 @@ import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.SettingsScreen
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
+import com.aure.clustertune.update.AppUpdateManager
+import com.aure.clustertune.update.InstallLaunchResult
+import com.aure.clustertune.update.UpdateCheckResult
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val container by lazy { AppContainer(this) }
+    private val appUpdateManager by lazy { AppUpdateManager(this) }
     private val viewModel by viewModels<TunerViewModel> {
         TunerViewModel.factory(
             repository = container.repository,
@@ -109,6 +113,7 @@ class MainActivity : ComponentActivity() {
                             },
                             canRequestAddQuickSettingsTile = QuickSettingsTilePrompt.isSupported,
                             isQuickSettingsTileAdded = settings.isQuickSettingsTileAdded,
+                            onCheckForUpdates = ::checkForUpdatesAndInstall,
                         )
                     } else {
                         MainTunerScreen(
@@ -171,6 +176,62 @@ class MainActivity : ComponentActivity() {
                 result.toToastMessage(),
                 Toast.LENGTH_SHORT,
             ).show()
+        }
+    }
+
+    private fun checkForUpdatesAndInstall() {
+        lifecycleScope.launch {
+            Toast.makeText(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT).show()
+            appUpdateManager.checkForUpdates()
+                .onSuccess { result ->
+                    when (result) {
+                        is UpdateCheckResult.UpToDate -> {
+                            Toast.makeText(
+                                applicationContext,
+                                "ClusterTune is up to date (${result.currentVersionName})",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+
+                        is UpdateCheckResult.UpdateAvailable -> {
+                            Toast.makeText(
+                                applicationContext,
+                                "Downloading ${result.release.tagName}…",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            appUpdateManager.downloadApk(result.release)
+                                .onSuccess { apkFile ->
+                                    when (appUpdateManager.installApk(apkFile)) {
+                                        InstallLaunchResult.Started -> Toast.makeText(
+                                            applicationContext,
+                                            "Opening installer for ${result.release.tagName}",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+
+                                        InstallLaunchResult.PermissionRequired -> Toast.makeText(
+                                            applicationContext,
+                                            "Allow ClusterTune to install unknown apps, then check again.",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                }
+                                .onFailure { throwable ->
+                                    Toast.makeText(
+                                        applicationContext,
+                                        throwable.message ?: "Failed to download update",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                        }
+                    }
+                }
+                .onFailure { throwable ->
+                    Toast.makeText(
+                        applicationContext,
+                        throwable.message ?: "Failed to check for updates",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
         }
     }
 
