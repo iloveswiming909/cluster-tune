@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
-import java.util.concurrent.TimeUnit
 
 private const val PROBE_MARKER = "clustertune-exec-probe-ok"
 
@@ -312,6 +311,15 @@ class ShizukuCommandRunner {
         }.getOrDefault(false)
     }
 
+    fun requestPermission(requestCode: Int): Result<Unit> {
+        return runCatching {
+            shizukuClass()
+                .getMethod("requestPermission", Int::class.javaPrimitiveType)
+                .invoke(null, requestCode)
+            Unit
+        }
+    }
+
     fun run(command: String, timeoutSeconds: Long): ShellCommandResult {
         return runCatching {
             val process = newProcess(arrayOf("sh", "-c", command))
@@ -368,8 +376,17 @@ private fun Process.collectOutput(timeoutSeconds: Long): ShellCommandResult {
     val stderr = ByteArrayOutputStream()
     val stdoutThread = inputStream.copyToInBackground(stdout)
     val stderrThread = errorStream.copyToInBackground(stderr)
-    val finished = waitFor(timeoutSeconds, TimeUnit.SECONDS)
-    if (!finished) {
+    val deadline = System.currentTimeMillis() + timeoutSeconds * 1_000L
+    var exitCode: Int? = null
+    while (System.currentTimeMillis() < deadline) {
+        val value = runCatching { exitValue() }.getOrNull()
+        if (value != null) {
+            exitCode = value
+            break
+        }
+        Thread.sleep(50)
+    }
+    if (exitCode == null) {
         destroyForcibly()
         stdoutThread.join(1_000)
         stderrThread.join(1_000)
@@ -383,7 +400,7 @@ private fun Process.collectOutput(timeoutSeconds: Long): ShellCommandResult {
     stdoutThread.join(1_000)
     stderrThread.join(1_000)
     return ShellCommandResult(
-        exitCode = exitValue(),
+        exitCode = exitCode,
         stdout = stdout.toString(),
         stderr = stderr.toString(),
     )

@@ -27,6 +27,7 @@ import com.aure.clustertune.sleep.SleepProfileMonitorService
 import com.aure.clustertune.tile.QuickSettingsTileAddResult
 import com.aure.clustertune.tile.QuickSettingsTilePrompt
 import com.aure.clustertune.tile.QuickSettingsTileRefresher
+import com.aure.clustertune.root.ShizukuCommandRunner
 import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.SettingsScreen
 import com.aure.clustertune.ui.TunerViewModel
@@ -43,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     private val container by lazy { AppContainer(this) }
     private val appUpdateManager by lazy { AppUpdateManager(this) }
+    private val shizukuCommandRunner by lazy { ShizukuCommandRunner() }
     private val pendingUpdateRelease = mutableStateOf<AppRelease?>(null)
     private val viewModel by viewModels<TunerViewModel> {
         TunerViewModel.factory(
@@ -124,6 +126,7 @@ class MainActivity : ComponentActivity() {
                             onCheckForUpdates = { checkForUpdates(showUpToDateToast = true) },
                             onAutomaticUpdateChecksEnabledChange = viewModel::setAutomaticUpdateChecksEnabled,
                             onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
+                            onRequestShizukuPermission = ::requestShizukuPermission,
                         )
                     } else {
                         MainTunerScreen(
@@ -196,6 +199,32 @@ class MainActivity : ComponentActivity() {
                 result.toToastMessage(),
                 Toast.LENGTH_SHORT,
             ).show()
+        }
+    }
+
+    private fun requestShizukuPermission() {
+        when {
+            !shizukuCommandRunner.isBinderAlive() -> {
+                Toast.makeText(applicationContext, "Shizuku is not running", Toast.LENGTH_LONG).show()
+            }
+
+            shizukuCommandRunner.hasPermission() -> {
+                Toast.makeText(applicationContext, "Shizuku permission is already granted", Toast.LENGTH_SHORT).show()
+            }
+
+            else -> {
+                shizukuCommandRunner.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+                    .onSuccess {
+                        Toast.makeText(applicationContext, "Shizuku permission requested", Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { throwable ->
+                        Toast.makeText(
+                            applicationContext,
+                            throwable.message ?: "Failed to request Shizuku permission",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+            }
         }
     }
 
@@ -333,6 +362,10 @@ class MainActivity : ComponentActivity() {
             QuickSettingsTileAddResult.UNAVAILABLE -> "Quick Settings tile prompt is unavailable on this device"
             QuickSettingsTileAddResult.ERROR -> "Failed to request Quick Settings tile"
         }
+    }
+
+    companion object {
+        private const val SHIZUKU_PERMISSION_REQUEST_CODE = 4100
     }
 }
 

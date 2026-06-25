@@ -74,6 +74,7 @@ fun SettingsScreen(
     onCheckForUpdates: () -> Unit,
     onAutomaticUpdateChecksEnabledChange: (Boolean) -> Unit,
     onUpdateCheckIntervalDaysChange: (Int) -> Unit,
+    onRequestShizukuPermission: () -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
     var updateIntervalText by remember(settings.updateCheckIntervalDays) {
@@ -206,6 +207,32 @@ fun SettingsScreen(
                     selected = settings.tileTapBehavior,
                     onChange = onTileTapBehaviorChange,
                 )
+            }
+        }
+
+        SettingsSection(title = "Privileged access") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Shizuku permission",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Grant this if you want ClusterTune to use Shizuku when vendor or root shell execution is unavailable.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TextButton(onClick = onRequestShizukuPermission) {
+                    Text("Grant")
+                }
             }
         }
 
