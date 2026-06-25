@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
 import com.aure.clustertune.model.PerformanceProfile
@@ -383,11 +384,6 @@ private fun DeviceExecutionMethodCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = "My device is",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -430,24 +426,30 @@ private fun DeviceExecutionMethodCard(
 private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxWidth(0.92f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Execution methods") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 ExecutionMethodHelpLine(
                     title = "PServer",
-                    body = "Best for Odin/AYN devices where the vendor PServer service runs commands and returns stdout.",
+                    appliesTo = "Odin/AYN devices with a vendor PServer service that returns stdout.",
+                    note = "This is the preferred path when available because it is device-native and gives command output directly.",
                 )
                 ExecutionMethodHelpLine(
                     title = "Shizuku",
-                    body = "Best for rooted devices running Shizuku/Sui. Requires granting ClusterTune permission once.",
+                    appliesTo = "Rooted devices running Shizuku or Sui.",
+                    note = "Requires granting ClusterTune permission once. Good when PServer is unavailable or unreliable.",
                 )
                 ExecutionMethodHelpLine(
                     title = "PServer fallback",
-                    body = "For vendor PServer variants that can run commands but do not return stdout reliably.",
+                    appliesTo = "Vendor PServer variants that can run commands but do not return stdout reliably.",
+                    note = "Uses a file-output workaround so ClusterTune can still read command results.",
                 )
                 ExecutionMethodHelpLine(
                     title = "Root shell",
-                    body = "Generic Magisk/su fallback for rooted devices without a usable vendor service or Shizuku setup.",
+                    appliesTo = "Generic rooted devices with Magisk/su.",
+                    note = "Broad fallback for devices without usable PServer or Shizuku setup.",
                 )
             }
         },
@@ -462,18 +464,33 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
 @Composable
 private fun ExecutionMethodHelpLine(
     title: String,
-    body: String,
+    appliesTo: String,
+    note: String,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            text = body,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Applies to: $appliesTo",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }
 
