@@ -1,5 +1,6 @@
 package com.aure.clustertune.root
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -100,6 +101,43 @@ class PrivilegedExecutionResolverTest {
         assertEquals("shizuku", resolver.selectedMethodId)
     }
 
+    @Test
+    fun `pserver file output read uses stdout when available`() {
+        val method = PServerFileOutputExecutionMethod(
+            context = null,
+            rootExec = FakePServerRootExecutor(
+                mapOf("cat '/sys/value' 2>/dev/null" to "42"),
+            ),
+            outputDirectory = temporaryDirectory(),
+        )
+
+        assertEquals("42", method.readText("/sys/value"))
+    }
+
+    @Test
+    fun `pserver file output read falls back to readable file when stdout is empty`() {
+        val method = PServerFileOutputExecutionMethod(
+            context = null,
+            rootExec = object : PServerRootExecutor {
+                override val pServerAvailable: Boolean = true
+
+                override fun executeAsRoot(cmd: String): Result<String?> {
+                    if (cmd == "cat '/sys/value' 2>/dev/null") {
+                        return Result.success(null)
+                    }
+                    val outputPath = Regex("> '([^']+)'").find(cmd)?.groupValues?.get(1)
+                    if (outputPath != null) {
+                        File(outputPath).writeText("24")
+                    }
+                    return Result.success(null)
+                }
+            },
+            outputDirectory = temporaryDirectory(),
+        )
+
+        assertEquals("24", method.readText("/sys/value"))
+    }
+
     private class FakeExecutionMethod(
         override val id: String,
         private val probeResult: ExecutionProbeResult,
@@ -121,5 +159,20 @@ class PrivilegedExecutionResolverTest {
         override fun readText(path: String): String? {
             return reads[path]
         }
+    }
+
+    private class FakePServerRootExecutor(
+        private val outputs: Map<String, String?>,
+    ) : PServerRootExecutor {
+        override val pServerAvailable: Boolean = true
+
+        override fun executeAsRoot(cmd: String): Result<String?> {
+            return Result.success(outputs[cmd])
+        }
+    }
+
+    private fun temporaryDirectory(): File {
+        return File(System.getProperty("java.io.tmpdir"), "clustertune-test-${System.nanoTime()}")
+            .also { it.mkdirs() }
     }
 }

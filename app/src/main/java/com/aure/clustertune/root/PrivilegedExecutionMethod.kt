@@ -139,7 +139,7 @@ class PrivilegedExecutionResolver(
 
 class PServerStdoutExecutionMethod(
     private val context: Context,
-    private val rootExec: RootExec = RootExec(),
+    private val rootExec: PServerRootExecutor = RootExec(),
 ) : PrivilegedExecutionMethod {
     override val id: String = "pserver-stdout"
 
@@ -179,8 +179,9 @@ class PServerStdoutExecutionMethod(
 }
 
 class PServerFileOutputExecutionMethod(
-    private val context: Context,
-    private val rootExec: RootExec = RootExec(),
+    private val context: Context?,
+    private val rootExec: PServerRootExecutor = RootExec(),
+    private val outputDirectory: File? = null,
 ) : PrivilegedExecutionMethod {
     override val id: String = "pserver-file-output"
 
@@ -213,9 +214,16 @@ class PServerFileOutputExecutionMethod(
 
     override fun executeScript(scriptName: String, scriptContents: String): Result<String?> {
         return runCatching {
-            val scriptFile = writeScriptFile(context, scriptName, scriptContents)
+            val scriptFile = writeScriptFile(requireContext(), scriptName, scriptContents)
             val outputFile = outputFile("${scriptFile.name}.out")
             outputFile.delete()
+            val directOutput = rootExec.executeAsRoot("sh ${shellQuote(scriptFile.absolutePath)}")
+                .getOrNull()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            if (directOutput != null) {
+                return@runCatching directOutput
+            }
             val command = buildString {
                 append("sh ${shellQuote(scriptFile.absolutePath)}")
                 append(" > ${shellQuote(outputFile.absolutePath)} 2>&1")
@@ -232,13 +240,20 @@ class PServerFileOutputExecutionMethod(
     }
 
     override fun readText(path: String): String? {
+        rootExec.executeAsRoot("cat ${shellQuote(path)} 2>/dev/null")
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
+
         val outputFile = outputFile("read-text.out")
         outputFile.delete()
         val command = buildString {
             append("cat ${shellQuote(path)} > ${shellQuote(outputFile.absolutePath)} 2>/dev/null")
             append(" && chmod 666 ${shellQuote(outputFile.absolutePath)}")
         }
-        rootExec.executeAsRoot(command).getOrNull() ?: return null
+        val result = rootExec.executeAsRoot(command)
+        if (result.isFailure) return null
         return outputFile.takeIf { it.isFile }
             ?.readText()
             ?.trim()
@@ -246,11 +261,15 @@ class PServerFileOutputExecutionMethod(
     }
 
     private fun outputFile(name: String): File {
-        val dir = File(context.filesDir, "root-output")
+        val dir = outputDirectory ?: File(requireContext().filesDir, "root-output")
         if (!dir.exists()) {
             dir.mkdirs()
         }
         return File(dir, name)
+    }
+
+    private fun requireContext(): Context {
+        return requireNotNull(context) { "Context is required for PServer file-output script execution" }
     }
 }
 

@@ -5,11 +5,16 @@ import android.os.IBinder
 import android.os.Parcel
 import java.nio.charset.Charset
 
+interface PServerRootExecutor {
+    val pServerAvailable: Boolean
+    fun executeAsRoot(cmd: String): Result<String?>
+}
+
 @SuppressLint("DiscouragedPrivateApi", "PrivateApi")
-class RootExec {
+class RootExec : PServerRootExecutor {
 
     private val binder: IBinder?
-    var pServerAvailable: Boolean = false
+    override var pServerAvailable: Boolean = false
         private set
 
     init {
@@ -22,7 +27,7 @@ class RootExec {
         }.getOrDefault(null)
     }
 
-    fun executeAsRoot(cmd: String): Result<String?> {
+    override fun executeAsRoot(cmd: String): Result<String?> {
         if (binder == null) return Result.failure(IllegalStateException("PServer not available"))
 
         val data = Parcel.obtain()
