@@ -146,6 +146,22 @@ enum class InstallLaunchResult {
     PermissionRequired,
 }
 
+object UpdateCheckPolicy {
+    private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1_000L
+
+    fun shouldCheck(
+        enabled: Boolean,
+        intervalDays: Int,
+        lastCheckMillis: Long,
+        nowMillis: Long,
+    ): Boolean {
+        if (!enabled) return false
+        if (lastCheckMillis <= 0L) return true
+        val intervalMillis = intervalDays.coerceAtLeast(1) * MILLIS_PER_DAY
+        return nowMillis - lastCheckMillis >= intervalMillis
+    }
+}
+
 object GitHubReleaseParser {
     fun parseLatestRelease(rawJson: String): AppRelease {
         val root = Json.parseToJsonElement(rawJson).jsonObject

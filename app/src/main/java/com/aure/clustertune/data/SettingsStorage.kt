@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aure.clustertune.model.AppColorSource
@@ -24,6 +25,9 @@ class SettingsStorage(private val context: Context) {
     private val quickSettingsTileAddedKey = booleanPreferencesKey("quick_settings_tile_added")
     private val colorSourceKey = stringPreferencesKey("color_source")
     private val accentColorKey = intPreferencesKey("accent_color")
+    private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
+    private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
+    private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
         AppSettings(
@@ -39,6 +43,9 @@ class SettingsStorage(private val context: Context) {
             sleepProfileId = preferences[sleepProfileIdKey],
             hasPromptedQuickSettingsTile = preferences[quickSettingsTilePromptShownKey] ?: false,
             isQuickSettingsTileAdded = preferences[quickSettingsTileAddedKey] ?: false,
+            automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
+            updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
+            lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
         )
     }
 
@@ -102,6 +109,24 @@ class SettingsStorage(private val context: Context) {
     suspend fun persistAccentColor(accentColor: Int) {
         context.settingsDataStore.edit { preferences ->
             preferences[accentColorKey] = accentColor
+        }
+    }
+
+    suspend fun persistAutomaticUpdateChecksEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[automaticUpdateChecksEnabledKey] = enabled
+        }
+    }
+
+    suspend fun persistUpdateCheckIntervalDays(days: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[updateCheckIntervalDaysKey] = days.coerceIn(1, 365)
+        }
+    }
+
+    suspend fun persistLastUpdateCheckMillis(timestampMillis: Long) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[lastUpdateCheckMillisKey] = timestampMillis
         }
     }
 

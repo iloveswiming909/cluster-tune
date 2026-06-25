@@ -72,8 +72,13 @@ fun SettingsScreen(
     canRequestAddQuickSettingsTile: Boolean,
     isQuickSettingsTileAdded: Boolean,
     onCheckForUpdates: () -> Unit,
+    onAutomaticUpdateChecksEnabledChange: (Boolean) -> Unit,
+    onUpdateCheckIntervalDaysChange: (Int) -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
+    var updateIntervalText by remember(settings.updateCheckIntervalDays) {
+        mutableStateOf(settings.updateCheckIntervalDays.toString())
+    }
 
     Column(
         modifier = Modifier
@@ -120,12 +125,49 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = "Check GitHub releases",
+                        text = "Automatic update checks",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "Downloads the latest ClusterTune APK and opens Android's package installer.",
+                        text = "ClusterTune will check GitHub releases when the app opens, no more often than the interval below.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Switch(
+                    checked = settings.automaticUpdateChecksEnabled,
+                    onCheckedChange = onAutomaticUpdateChecksEnabledChange,
+                )
+            }
+            OutlinedTextField(
+                value = updateIntervalText,
+                onValueChange = { rawValue ->
+                    val digits = rawValue.filter(Char::isDigit).take(3)
+                    updateIntervalText = digits
+                    digits.toIntOrNull()?.let(onUpdateCheckIntervalDaysChange)
+                },
+                label = { Text("Days between checks") },
+                supportingText = { Text("Default is 7 days. Minimum is 1 day.") },
+                enabled = settings.automaticUpdateChecksEnabled,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Check GitHub releases now",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Shows the changelog before downloading the latest ClusterTune APK and opening Android's package installer.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

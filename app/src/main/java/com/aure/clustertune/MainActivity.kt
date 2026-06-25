@@ -7,11 +7,15 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,8 +31,10 @@ import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.SettingsScreen
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
+import com.aure.clustertune.update.AppRelease
 import com.aure.clustertune.update.AppUpdateManager
 import com.aure.clustertune.update.InstallLaunchResult
+import com.aure.clustertune.update.UpdateCheckPolicy
 import com.aure.clustertune.update.UpdateCheckResult
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -37,6 +43,7 @@ class MainActivity : ComponentActivity() {
 
     private val container by lazy { AppContainer(this) }
     private val appUpdateManager by lazy { AppUpdateManager(this) }
+    private val pendingUpdateRelease = mutableStateOf<AppRelease?>(null)
     private val viewModel by viewModels<TunerViewModel> {
         TunerViewModel.factory(
             repository = container.repository,
@@ -68,6 +75,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         maybeRequestQuickSettingsTileOnFirstRun()
+        maybeCheckForUpdatesOnLaunch()
 
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
@@ -113,7 +121,9 @@ class MainActivity : ComponentActivity() {
                             },
                             canRequestAddQuickSettingsTile = QuickSettingsTilePrompt.isSupported,
                             isQuickSettingsTileAdded = settings.isQuickSettingsTileAdded,
-                            onCheckForUpdates = ::checkForUpdatesAndInstall,
+                            onCheckForUpdates = { checkForUpdates(showUpToDateToast = true) },
+                            onAutomaticUpdateChecksEnabledChange = viewModel::setAutomaticUpdateChecksEnabled,
+                            onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
                         )
                     } else {
                         MainTunerScreen(
@@ -133,6 +143,16 @@ class MainActivity : ComponentActivity() {
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,
                             onErrorMessageShown = viewModel::consumeErrorMessage,
+                        )
+                    }
+                    pendingUpdateRelease.value?.let { release ->
+                        UpdateAvailableDialog(
+                            release = release,
+                            onDismiss = { pendingUpdateRelease.value = null },
+                            onInstall = {
+                                pendingUpdateRelease.value = null
+                                downloadAndInstallUpdate(release)
+                            },
                         )
                     }
                 }
@@ -179,49 +199,45 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun checkForUpdatesAndInstall() {
+    private fun maybeCheckForUpdatesOnLaunch() {
         lifecycleScope.launch {
-            Toast.makeText(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT).show()
+            val settings = container.settingsStorage.settings.first()
+            val nowMillis = System.currentTimeMillis()
+            if (!UpdateCheckPolicy.shouldCheck(
+                    enabled = settings.automaticUpdateChecksEnabled,
+                    intervalDays = settings.updateCheckIntervalDays,
+                    lastCheckMillis = settings.lastUpdateCheckMillis,
+                    nowMillis = nowMillis,
+                )
+            ) {
+                return@launch
+            }
+            container.settingsStorage.persistLastUpdateCheckMillis(nowMillis)
+            checkForUpdates(showUpToDateToast = false)
+        }
+    }
+
+    private fun checkForUpdates(showUpToDateToast: Boolean) {
+        lifecycleScope.launch {
+            if (showUpToDateToast) {
+                Toast.makeText(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT).show()
+            }
+            container.settingsStorage.persistLastUpdateCheckMillis(System.currentTimeMillis())
             appUpdateManager.checkForUpdates()
                 .onSuccess { result ->
                     when (result) {
                         is UpdateCheckResult.UpToDate -> {
-                            Toast.makeText(
-                                applicationContext,
-                                "ClusterTune is up to date (${result.currentVersionName})",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                            if (showUpToDateToast) {
+                                Toast.makeText(
+                                    applicationContext,
+                                    "ClusterTune is up to date (${result.currentVersionName})",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
                         }
 
                         is UpdateCheckResult.UpdateAvailable -> {
-                            Toast.makeText(
-                                applicationContext,
-                                "Downloading ${result.release.tagName}…",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                            appUpdateManager.downloadApk(result.release)
-                                .onSuccess { apkFile ->
-                                    when (appUpdateManager.installApk(apkFile)) {
-                                        InstallLaunchResult.Started -> Toast.makeText(
-                                            applicationContext,
-                                            "Opening installer for ${result.release.tagName}",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-
-                                        InstallLaunchResult.PermissionRequired -> Toast.makeText(
-                                            applicationContext,
-                                            "Allow ClusterTune to install unknown apps, then check again.",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-                                    }
-                                }
-                                .onFailure { throwable ->
-                                    Toast.makeText(
-                                        applicationContext,
-                                        throwable.message ?: "Failed to download update",
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                                }
+                            pendingUpdateRelease.value = result.release
                         }
                     }
                 }
@@ -229,6 +245,39 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(
                         applicationContext,
                         throwable.message ?: "Failed to check for updates",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+        }
+    }
+
+    private fun downloadAndInstallUpdate(release: AppRelease) {
+        lifecycleScope.launch {
+            Toast.makeText(
+                applicationContext,
+                "Downloading ${release.tagName}…",
+                Toast.LENGTH_SHORT,
+            ).show()
+            appUpdateManager.downloadApk(release)
+                .onSuccess { apkFile ->
+                    when (appUpdateManager.installApk(apkFile)) {
+                        InstallLaunchResult.Started -> Toast.makeText(
+                            applicationContext,
+                            "Opening installer for ${release.tagName}",
+                            Toast.LENGTH_LONG,
+                        ).show()
+
+                        InstallLaunchResult.PermissionRequired -> Toast.makeText(
+                            applicationContext,
+                            "Allow ClusterTune to install unknown apps, then check again.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                .onFailure { throwable ->
+                    Toast.makeText(
+                        applicationContext,
+                        throwable.message ?: "Failed to download update",
                         Toast.LENGTH_LONG,
                     ).show()
                 }
@@ -285,4 +334,34 @@ class MainActivity : ComponentActivity() {
             QuickSettingsTileAddResult.ERROR -> "Failed to request Quick Settings tile"
         }
     }
+}
+
+@Composable
+private fun UpdateAvailableDialog(
+    release: AppRelease,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Update ${release.tagName} available") },
+        text = {
+            Text(
+                text = release.body
+                    ?.takeIf { it.isNotBlank() }
+                    ?.take(2_000)
+                    ?: "No changelog was provided for this release.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onInstall) {
+                Text("Install")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Not now")
+            }
+        },
+    )
 }

@@ -20,4 +20,7 @@ data class AppSettings(
     val sleepProfileId: String? = null,
     val hasPromptedQuickSettingsTile: Boolean = false,
     val isQuickSettingsTileAdded: Boolean = false,
+    val automaticUpdateChecksEnabled: Boolean = true,
+    val updateCheckIntervalDays: Int = 7,
+    val lastUpdateCheckMillis: Long = 0L,
 )

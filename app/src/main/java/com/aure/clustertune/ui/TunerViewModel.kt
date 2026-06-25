@@ -245,6 +245,18 @@ class TunerViewModel(
         }
     }
 
+    fun setAutomaticUpdateChecksEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistAutomaticUpdateChecksEnabled(enabled)
+        }
+    }
+
+    fun setUpdateCheckIntervalDays(days: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistUpdateCheckIntervalDays(days)
+        }
+    }
+
     fun refreshLiveState() {
         repository.refreshLiveValues()
     }

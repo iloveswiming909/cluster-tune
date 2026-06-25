@@ -64,4 +64,14 @@ class AppUpdateManagerTest {
 
         assertTrue(result.isFailure)
     }
+
+    @Test
+    fun `automatic update policy checks only when enabled and interval elapsed`() {
+        val dayMillis = 24L * 60L * 60L * 1_000L
+
+        assertTrue(UpdateCheckPolicy.shouldCheck(true, 7, 0L, dayMillis))
+        assertTrue(UpdateCheckPolicy.shouldCheck(true, 7, dayMillis, dayMillis * 8))
+        assertTrue(!UpdateCheckPolicy.shouldCheck(true, 7, dayMillis, dayMillis * 7))
+        assertTrue(!UpdateCheckPolicy.shouldCheck(false, 7, 0L, dayMillis))
+    }
 }
