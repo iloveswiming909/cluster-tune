@@ -6,21 +6,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class RootCommandRunner(
-    private val context: Context,
-    private val rootExec: RootExec = RootExec(),
+    context: Context,
+    private val executionResolver: PrivilegedExecutionResolver = PrivilegedExecutionResolver.default(context),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     val isAvailable: Boolean
-        get() = rootExec.pServerAvailable
+        get() = executionResolver.isAvailable
+
+    val selectedExecutionMethodId: String?
+        get() = executionResolver.selectedMethodId
 
     suspend fun executeScript(script: String): Result<String?> = withContext(dispatcher) {
-        runCatching {
-            RootSupport.runGeneratedScript(
-                context = context,
-                scriptName = "apply-frequencies.sh",
-                scriptContents = script,
-            )
-        }
+        executionResolver.executeScript(
+            scriptName = "apply-frequencies.sh",
+            scriptContents = script,
+        )
     }
 }
