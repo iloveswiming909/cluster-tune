@@ -15,8 +15,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -24,10 +31,15 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,6 +73,40 @@ private val privilegedExecutionOptions = listOf(
     "shizuku",
     "pserver-file-output",
     "root-shell",
+)
+
+private data class ExecutionMethodInfo(
+    val id: String,
+    val label: String,
+    val appliesTo: String,
+    val note: String,
+)
+
+private val executionMethodInfo = listOf(
+    ExecutionMethodInfo(
+        id = "pserver-stdout",
+        label = "PServer",
+        appliesTo = "Odin/AYN vendor PServer with stdout.",
+        note = "Preferred when available: direct output, no extra permission.",
+    ),
+    ExecutionMethodInfo(
+        id = "shizuku",
+        label = "Shizuku",
+        appliesTo = "Rooted devices running Shizuku or Sui.",
+        note = "Needs one-time permission; good when PServer is unavailable.",
+    ),
+    ExecutionMethodInfo(
+        id = "pserver-file-output",
+        label = "PServer fallback",
+        appliesTo = "PServer variants without reliable stdout.",
+        note = "Uses a file-output workaround to read command results.",
+    ),
+    ExecutionMethodInfo(
+        id = "root-shell",
+        label = "Root shell",
+        appliesTo = "Generic rooted devices with Magisk/su.",
+        note = "Broad fallback when PServer and Shizuku are not usable.",
+    ),
 )
 
 @Composable
@@ -370,10 +416,11 @@ private fun DeviceExecutionMethodCard(
     onRequestShizukuPermission: () -> Unit,
     onShowHelp: () -> Unit,
 ) {
+    val selectedInfo = executionMethodInfo.firstOrNull { info -> info.id == selectedMethodId }
     val needsPermission = selectedMethodId == "shizuku" && !isShizukuPermissionGranted
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
@@ -381,41 +428,88 @@ private fun DeviceExecutionMethodCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Execution method",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                TextButton(onClick = onShowHelp) {
-                    Text("Help")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "Execution method",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = selectedInfo?.appliesTo ?: "Pick how ClusterTune gets privileged access on this device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                IconButton(onClick = onShowHelp) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.HelpOutline,
+                        contentDescription = "Explain execution methods",
+                    )
                 }
             }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onAutoDetect) {
-                    Text("Auto detect")
+                FilledTonalButton(
+                    onClick = onAutoDetect,
+                    contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize),
+                    )
+                    Text(
+                        text = "Auto detect",
+                        modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
+                    )
                 }
                 PrivilegedExecutionMethodSelector(
                     selectedMethodId = selectedMethodId,
                     onChange = onMethodChange,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
+                OutlinedButton(
                     onClick = onRequestShizukuPermission,
                     enabled = needsPermission,
+                    contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                 ) {
-                    Text(permissionButtonLabel(selectedMethodId, isShizukuPermissionGranted))
+                    Icon(
+                        imageVector = Icons.Rounded.Security,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize),
+                    )
+                    Text(
+                        text = permissionButtonLabel(selectedMethodId, isShizukuPermissionGranted),
+                        modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
+                    )
                 }
             }
         }
@@ -428,68 +522,110 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxWidth(0.92f),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text("Execution methods") },
+        title = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Execution methods")
+                    Text(
+                        text = "Choose the backend that matches this handheld.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ExecutionMethodHelpLine(
-                    title = "PServer",
-                    appliesTo = "Odin/AYN devices with a vendor PServer service that returns stdout.",
-                    note = "This is the preferred path when available because it is device-native and gives command output directly.",
-                )
-                ExecutionMethodHelpLine(
-                    title = "Shizuku",
-                    appliesTo = "Rooted devices running Shizuku or Sui.",
-                    note = "Requires granting ClusterTune permission once. Good when PServer is unavailable or unreliable.",
-                )
-                ExecutionMethodHelpLine(
-                    title = "PServer fallback",
-                    appliesTo = "Vendor PServer variants that can run commands but do not return stdout reliably.",
-                    note = "Uses a file-output workaround so ClusterTune can still read command results.",
-                )
-                ExecutionMethodHelpLine(
-                    title = "Root shell",
-                    appliesTo = "Generic rooted devices with Magisk/su.",
-                    note = "Broad fallback for devices without usable PServer or Shizuku setup.",
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    executionMethodInfo.take(2).forEach { info ->
+                        ExecutionMethodHelpLine(info = info)
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    executionMethodInfo.drop(2).forEach { info ->
+                        ExecutionMethodHelpLine(info = info)
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("OK")
+                Text("Done")
             }
         },
     )
 }
 
 @Composable
-private fun ExecutionMethodHelpLine(
-    title: String,
-    appliesTo: String,
-    note: String,
-) {
+private fun ExecutionMethodHelpLine(info: ExecutionMethodInfo) {
     Card(
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "Applies to: $appliesTo",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = note,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Text(
+                    text = info.label.first().toString(),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = info.label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Applies to: ${info.appliesTo}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = info.note,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -515,11 +651,29 @@ private fun PrivilegedExecutionMethodSelector(
     val selectedLabel = selectedMethodId?.let(::executionMethodLabel) ?: "Not detected yet"
 
     Box(modifier = modifier) {
-        TextButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth(),
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true },
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
         ) {
-            Text(selectedLabel)
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "⌄",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         DropdownMenu(
             expanded = expanded,
