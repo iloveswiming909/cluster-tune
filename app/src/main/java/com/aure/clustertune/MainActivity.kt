@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
                             onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
                             onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
                             onAutoDetectPrivilegedExecutionMethod = viewModel::autoDetectPrivilegedExecutionMethod,
+                            isShizukuPermissionGranted = shizukuCommandRunner.hasPermission(),
                             onRequestShizukuPermission = ::requestShizukuPermission,
                         )
                     } else {

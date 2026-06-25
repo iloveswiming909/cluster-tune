@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -83,9 +84,11 @@ fun SettingsScreen(
     onUpdateCheckIntervalDaysChange: (Int) -> Unit,
     onPrivilegedExecutionMethodChange: (String?) -> Unit,
     onAutoDetectPrivilegedExecutionMethod: () -> Unit,
+    isShizukuPermissionGranted: Boolean,
     onRequestShizukuPermission: () -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
+    var showExecutionMethodHelp by remember { mutableStateOf(false) }
     var updateIntervalText by remember(settings.updateCheckIntervalDays) {
         mutableStateOf(settings.updateCheckIntervalDays.toString())
     }
@@ -127,60 +130,30 @@ fun SettingsScreen(
         SettingsSection(title = "Updates") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "Automatic update checks",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "ClusterTune will check GitHub releases when the app opens, no more often than the interval below.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
+                Text(
+                    text = "Auto check",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Switch(
                     checked = settings.automaticUpdateChecksEnabled,
                     onCheckedChange = onAutomaticUpdateChecksEnabledChange,
                 )
-            }
-            OutlinedTextField(
-                value = updateIntervalText,
-                onValueChange = { rawValue ->
-                    val digits = rawValue.filter(Char::isDigit).take(3)
-                    updateIntervalText = digits
-                    digits.toIntOrNull()?.let(onUpdateCheckIntervalDaysChange)
-                },
-                label = { Text("Days between checks") },
-                supportingText = { Text("Default is 7 days. Minimum is 1 day.") },
-                enabled = settings.automaticUpdateChecksEnabled,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(
+                OutlinedTextField(
+                    value = updateIntervalText,
+                    onValueChange = { rawValue ->
+                        val digits = rawValue.filter(Char::isDigit).take(3)
+                        updateIntervalText = digits
+                        digits.toIntOrNull()?.let(onUpdateCheckIntervalDaysChange)
+                    },
+                    label = { Text("Days") },
+                    enabled = settings.automaticUpdateChecksEnabled,
+                    singleLine = true,
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "Check GitHub releases now",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Shows the changelog before downloading the latest ClusterTune APK and opening Android's package installer.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
+                )
                 TextButton(onClick = onCheckForUpdates) {
                     Text("Check")
                 }
@@ -219,60 +192,14 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Privileged access") {
-            SettingsControlGroup(label = "Execution method") {
-                PrivilegedExecutionMethodSelector(
-                    selectedMethodId = settings.privilegedExecutionMethodId,
-                    onChange = onPrivilegedExecutionMethodChange,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "Auto detect best method",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Re-probes this device and updates the selected execution method.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                TextButton(onClick = onAutoDetectPrivilegedExecutionMethod) {
-                    Text("Detect")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "Shizuku permission",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Grant this if you want ClusterTune to use Shizuku when vendor or root shell execution is unavailable.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                TextButton(onClick = onRequestShizukuPermission) {
-                    Text("Grant")
-                }
-            }
-        }
+        DeviceExecutionMethodCard(
+            selectedMethodId = settings.privilegedExecutionMethodId,
+            isShizukuPermissionGranted = isShizukuPermissionGranted,
+            onAutoDetect = onAutoDetectPrivilegedExecutionMethod,
+            onMethodChange = onPrivilegedExecutionMethodChange,
+            onRequestShizukuPermission = onRequestShizukuPermission,
+            onShowHelp = { showExecutionMethodHelp = true },
+        )
 
         SettingsSection(title = "Startup") {
             Row(
@@ -403,6 +330,10 @@ fun SettingsScreen(
         }
     }
 
+    if (showExecutionMethodHelp) {
+        ExecutionMethodHelpDialog(onDismiss = { showExecutionMethodHelp = false })
+    }
+
     if (showResetConfirmation) {
         AlertDialog(
             onDismissRequest = { showResetConfirmation = false },
@@ -429,33 +360,151 @@ fun SettingsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeviceExecutionMethodCard(
+    selectedMethodId: String?,
+    isShizukuPermissionGranted: Boolean,
+    onAutoDetect: () -> Unit,
+    onMethodChange: (String?) -> Unit,
+    onRequestShizukuPermission: () -> Unit,
+    onShowHelp: () -> Unit,
+) {
+    val needsPermission = selectedMethodId == "shizuku" && !isShizukuPermissionGranted
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "My device is",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Execution method",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                TextButton(onClick = onShowHelp) {
+                    Text("Help")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onAutoDetect) {
+                    Text("Auto detect")
+                }
+                PrivilegedExecutionMethodSelector(
+                    selectedMethodId = selectedMethodId,
+                    onChange = onMethodChange,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = onRequestShizukuPermission,
+                    enabled = needsPermission,
+                ) {
+                    Text(permissionButtonLabel(selectedMethodId, isShizukuPermissionGranted))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Execution methods") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExecutionMethodHelpLine(
+                    title = "PServer",
+                    body = "Best for Odin/AYN devices where the vendor PServer service runs commands and returns stdout.",
+                )
+                ExecutionMethodHelpLine(
+                    title = "Shizuku",
+                    body = "Best for rooted devices running Shizuku/Sui. Requires granting ClusterTune permission once.",
+                )
+                ExecutionMethodHelpLine(
+                    title = "PServer fallback",
+                    body = "For vendor PServer variants that can run commands but do not return stdout reliably.",
+                )
+                ExecutionMethodHelpLine(
+                    title = "Root shell",
+                    body = "Generic Magisk/su fallback for rooted devices without a usable vendor service or Shizuku setup.",
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ExecutionMethodHelpLine(
+    title: String,
+    body: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = body,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+private fun permissionButtonLabel(
+    selectedMethodId: String?,
+    isShizukuPermissionGranted: Boolean,
+): String {
+    return when {
+        selectedMethodId != "shizuku" -> "No permission"
+        isShizukuPermissionGranted -> "Granted"
+        else -> "Grant"
+    }
+}
+
 @Composable
 private fun PrivilegedExecutionMethodSelector(
     selectedMethodId: String?,
     onChange: (String?) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = selectedMethodId?.let(::executionMethodLabel) ?: "Not detected yet"
 
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth(),
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-            singleLine = true,
-        )
-        ExposedDropdownMenu(
+    Box(modifier = modifier) {
+        TextButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(selectedLabel)
+        }
+        DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
