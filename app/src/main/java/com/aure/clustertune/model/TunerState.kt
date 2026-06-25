@@ -3,6 +3,7 @@ package com.aure.clustertune.model
 data class TunerState(
     val isLoading: Boolean = true,
     val isPServerAvailable: Boolean = false,
+    val privilegedExecutionMethodId: String? = null,
     val policies: List<CpuPolicyInfo> = emptyList(),
     val actualValues: Map<Int, Int> = emptyMap(),
     val currentValues: Map<Int, Int> = emptyMap(),

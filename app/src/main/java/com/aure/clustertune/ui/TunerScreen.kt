@@ -125,7 +125,7 @@ fun MainTunerScreen(
                 LoadingClustersCard()
             } else if (!state.isPServerAvailable) {
                 Text(
-                    text = "Your device is not compatible with this app",
+                    text = "No compatible privileged execution method found",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
@@ -384,6 +384,13 @@ private fun Header(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
+                state.privilegedExecutionMethodId?.let { methodId ->
+                    AssistChip(
+                        onClick = {},
+                        label = { Text("Execution: $methodId") },
+                        enabled = false,
+                    )
+                }
                 onOpenSettings?.let { openSettings ->
                     IconButton(onClick = openSettings) {
                         Icon(

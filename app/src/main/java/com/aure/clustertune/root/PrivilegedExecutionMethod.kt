@@ -1,7 +1,11 @@
 package com.aure.clustertune.root
 
 import android.content.Context
+import android.content.pm.PackageManager
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.util.concurrent.TimeUnit
 
 private const val PROBE_MARKER = "clustertune-exec-probe-ok"
 
@@ -73,6 +77,8 @@ class PrivilegedExecutionResolver(
                 listOf(
                     PServerStdoutExecutionMethod(context, rootExec),
                     PServerFileOutputExecutionMethod(context, rootExec),
+                    RootShellExecutionMethod(),
+                    ShizukuExecutionMethod(),
                 ),
             )
         }
@@ -193,6 +199,204 @@ class PServerFileOutputExecutionMethod(
             dir.mkdirs()
         }
         return File(dir, name)
+    }
+}
+
+class RootShellExecutionMethod(
+    private val runner: RootShellCommandRunner = RootShellCommandRunner(),
+) : PrivilegedExecutionMethod {
+    override val id: String = "root-shell"
+
+    override fun probe(): ExecutionProbeResult {
+        val result = runner.run("echo $PROBE_MARKER", timeoutSeconds = 10)
+        return if (result.exitCode == 0 && result.stdout.trim() == PROBE_MARKER) {
+            ExecutionProbeResult(isAvailable = true, supportsStdout = true)
+        } else {
+            ExecutionProbeResult(
+                isAvailable = false,
+                supportsStdout = false,
+                failureReason = result.failureMessage ?: "su did not return expected probe output",
+            )
+        }
+    }
+
+    override fun executeScript(scriptName: String, scriptContents: String): Result<String?> {
+        return runner.run(scriptContents, timeoutSeconds = 30).toResult()
+    }
+
+    override fun readText(path: String): String? {
+        return runner.run("cat ${shellQuote(path)} 2>/dev/null", timeoutSeconds = 10)
+            .takeIf { it.exitCode == 0 }
+            ?.stdout
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+}
+
+class ShizukuExecutionMethod(
+    private val runner: ShizukuCommandRunner = ShizukuCommandRunner(),
+) : PrivilegedExecutionMethod {
+    override val id: String = "shizuku"
+
+    override fun probe(): ExecutionProbeResult {
+        if (!runner.isBinderAlive()) {
+            return ExecutionProbeResult(
+                isAvailable = false,
+                supportsStdout = false,
+                failureReason = "Shizuku binder not available",
+            )
+        }
+        if (!runner.hasPermission()) {
+            return ExecutionProbeResult(
+                isAvailable = false,
+                supportsStdout = false,
+                failureReason = "Shizuku permission not granted",
+            )
+        }
+        val result = runner.run("echo $PROBE_MARKER", timeoutSeconds = 10)
+        return if (result.exitCode == 0 && result.stdout.trim() == PROBE_MARKER) {
+            ExecutionProbeResult(isAvailable = true, supportsStdout = true)
+        } else {
+            ExecutionProbeResult(
+                isAvailable = false,
+                supportsStdout = false,
+                failureReason = result.failureMessage ?: "Shizuku did not return expected probe output",
+            )
+        }
+    }
+
+    override fun executeScript(scriptName: String, scriptContents: String): Result<String?> {
+        return runner.run(scriptContents, timeoutSeconds = 30).toResult()
+    }
+
+    override fun readText(path: String): String? {
+        return runner.run("cat ${shellQuote(path)} 2>/dev/null", timeoutSeconds = 10)
+            .takeIf { it.exitCode == 0 }
+            ?.stdout
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+}
+
+class RootShellCommandRunner {
+    fun run(command: String, timeoutSeconds: Long): ShellCommandResult {
+        return runCatching {
+            val process = ProcessBuilder("su", "-c", command).start()
+            process.collectOutput(timeoutSeconds)
+        }.getOrElse { throwable ->
+            ShellCommandResult(
+                exitCode = -1,
+                stdout = "",
+                stderr = "",
+                failureMessage = throwable.message ?: throwable::class.java.simpleName,
+            )
+        }
+    }
+}
+
+class ShizukuCommandRunner {
+    fun isBinderAlive(): Boolean {
+        return runCatching {
+            shizukuClass()
+                .getMethod("pingBinder")
+                .invoke(null) as Boolean
+        }.getOrDefault(false)
+    }
+
+    fun hasPermission(): Boolean {
+        return runCatching {
+            val permission = shizukuClass()
+                .getMethod("checkSelfPermission")
+                .invoke(null) as Int
+            permission == PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+    }
+
+    fun run(command: String, timeoutSeconds: Long): ShellCommandResult {
+        return runCatching {
+            val process = newProcess(arrayOf("sh", "-c", command))
+            process.collectOutput(timeoutSeconds)
+        }.getOrElse { throwable ->
+            ShellCommandResult(
+                exitCode = -1,
+                stdout = "",
+                stderr = "",
+                failureMessage = throwable.message ?: throwable::class.java.simpleName,
+            )
+        }
+    }
+
+    private fun newProcess(command: Array<String>): Process {
+        val method = shizukuClass().getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java,
+        )
+        method.isAccessible = true
+        return method.invoke(null, command, null, null) as Process
+    }
+
+    private fun shizukuClass(): Class<*> {
+        return Class.forName("rikka.shizuku.Shizuku")
+    }
+}
+
+data class ShellCommandResult(
+    val exitCode: Int,
+    val stdout: String,
+    val stderr: String,
+    val failureMessage: String? = null,
+) {
+    fun toResult(): Result<String?> {
+        return if (exitCode == 0) {
+            Result.success(stdout.trim().takeIf { it.isNotEmpty() })
+        } else {
+            Result.failure(
+                IllegalStateException(
+                    failureMessage
+                        ?: stderr.trim().takeIf { it.isNotEmpty() }
+                        ?: "Command failed with exit code $exitCode",
+                ),
+            )
+        }
+    }
+}
+
+private fun Process.collectOutput(timeoutSeconds: Long): ShellCommandResult {
+    val stdout = ByteArrayOutputStream()
+    val stderr = ByteArrayOutputStream()
+    val stdoutThread = inputStream.copyToInBackground(stdout)
+    val stderrThread = errorStream.copyToInBackground(stderr)
+    val finished = waitFor(timeoutSeconds, TimeUnit.SECONDS)
+    if (!finished) {
+        destroyForcibly()
+        stdoutThread.join(1_000)
+        stderrThread.join(1_000)
+        return ShellCommandResult(
+            exitCode = -1,
+            stdout = stdout.toString(),
+            stderr = stderr.toString(),
+            failureMessage = "Command timed out after ${timeoutSeconds}s",
+        )
+    }
+    stdoutThread.join(1_000)
+    stderrThread.join(1_000)
+    return ShellCommandResult(
+        exitCode = exitValue(),
+        stdout = stdout.toString(),
+        stderr = stderr.toString(),
+    )
+}
+
+private fun InputStream.copyToInBackground(output: ByteArrayOutputStream): Thread {
+    return Thread {
+        use { input ->
+            input.copyTo(output)
+        }
+    }.also { thread ->
+        thread.isDaemon = true
+        thread.start()
     }
 }
 

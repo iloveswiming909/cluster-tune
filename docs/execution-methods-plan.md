@@ -49,8 +49,9 @@ Everything above this layer should treat privileged execution as a capability, n
    - First implementation can be conservative and not lock files aggressively until tested.
 
 4. **Shizuku**
-   - Later. Do not add the dependency until the interface exists and PServer/root paths are stable.
-   - Shizuku can implement the same API if it can run the required shell commands with enough privileges on target devices.
+   - Implemented behind the same API.
+   - Probe: Shizuku binder alive, app permission granted, and `echo <marker>` returns stdout.
+   - On-device test tomorrow should decide whether Shizuku has enough privilege for ClusterTune's sysfs reads/writes. If it does not, remove this method and dependency.
 
 ## Implementation milestones
 
@@ -65,12 +66,19 @@ Everything above this layer should treat privileged execution as a capability, n
 
 ### Milestone 2: root shell fallback
 
-- Add `RootShellExecutionMethod`.
-- Use `ProcessBuilder("su", "-c", command)` with bounded output capture.
-- Add tests for command construction where practical.
-- On-device verify before treating it as supported in UI.
+- [x] Add `RootShellExecutionMethod`.
+- [x] Use `ProcessBuilder("su", "-c", command)` with bounded output capture.
+- [ ] On-device verify before treating it as supported in UI.
 
-### Milestone 3: capability reporting
+### Milestone 3: Shizuku implementation
+
+- [x] Add Shizuku API/provider dependencies and manifest provider.
+- [x] Add `ShizukuExecutionMethod` behind the same API.
+- [x] Probe binder availability, permission, and actual shell stdout using `echo <marker>`.
+- [ ] On-device verify whether Shizuku's shell/root identity can read/write the sysfs nodes ClusterTune needs.
+- [ ] If Shizuku cannot access the required nodes, remove the method and dependency.
+
+### Milestone 4: capability reporting
 
 Expose diagnostics in state/UI/logs:
 
