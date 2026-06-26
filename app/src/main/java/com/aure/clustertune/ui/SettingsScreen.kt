@@ -24,7 +24,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.GridView
@@ -39,14 +38,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
@@ -85,13 +82,6 @@ private val accentColorOptions = listOf(
     0xFF8E24AA.toInt(),
     0xFF00639A.toInt(),
     0xFF9A4600.toInt(),
-)
-
-private val privilegedExecutionOptions = listOf(
-    "pserver-stdout",
-    "shizuku",
-    "pserver-file-output",
-    "root-shell",
 )
 
 private data class ExecutionMethodInfo(
@@ -155,7 +145,7 @@ fun SettingsScreen(
     onRequestShizukuPermission: () -> Unit,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
-    var showExecutionMethodHelp by remember { mutableStateOf(false) }
+
     var updateIntervalText by remember(settings.updateCheckIntervalDays) {
         mutableStateOf(settings.updateCheckIntervalDays.toString())
     }
@@ -267,7 +257,6 @@ fun SettingsScreen(
             onAutoDetect = onAutoDetectPrivilegedExecutionMethod,
             onMethodChange = onPrivilegedExecutionMethodChange,
             onRequestShizukuPermission = onRequestShizukuPermission,
-            onShowHelp = { showExecutionMethodHelp = true },
         )
 
         SettingsSection(title = "Startup", icon = Icons.Rounded.PowerSettingsNew) {
@@ -399,9 +388,6 @@ fun SettingsScreen(
         }
     }
 
-    if (showExecutionMethodHelp) {
-        ExecutionMethodHelpDialog(onDismiss = { showExecutionMethodHelp = false })
-    }
 
     if (showResetConfirmation) {
         AlertDialog(
@@ -436,7 +422,6 @@ private fun DeviceExecutionMethodCard(
     onAutoDetect: () -> Unit,
     onMethodChange: (String?) -> Unit,
     onRequestShizukuPermission: () -> Unit,
-    onShowHelp: () -> Unit,
 ) {
     val selectedInfo = executionMethodInfo.firstOrNull { info -> info.id == selectedMethodId }
     val needsPermission = selectedMethodId == "shizuku" && !isShizukuPermissionGranted
@@ -455,41 +440,30 @@ private fun DeviceExecutionMethodCard(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Terminal,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(10.dp),
-                        )
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "Execution method",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = selectedInfo?.appliesTo ?: "Pick how ClusterTune gets privileged access on this device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                IconButton(onClick = onShowHelp) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.HelpOutline,
-                        contentDescription = "Explain execution methods",
+                        imageVector = Icons.Rounded.Terminal,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Execution method",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = selectedInfo?.appliesTo ?: "Pick how ClusterTune gets privileged access on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -539,7 +513,11 @@ private fun DeviceExecutionMethodCard(
 }
 
 @Composable
-private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
+private fun ExecutionMethodSelectionDialog(
+    selectedMethodId: String?,
+    onChange: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxWidth(0.92f),
@@ -561,7 +539,7 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Execution methods")
+                    Text("Execution method")
                     Text(
                         text = "Choose the backend that matches this handheld.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -580,7 +558,14 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     executionMethodInfo.take(2).forEach { info ->
-                        ExecutionMethodHelpLine(info = info)
+                        ExecutionMethodOptionRow(
+                            info = info,
+                            selected = selectedMethodId == info.id,
+                            onClick = {
+                                onChange(info.id)
+                                onDismiss()
+                            },
+                        )
                     }
                 }
                 Column(
@@ -588,25 +573,41 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     executionMethodInfo.drop(2).forEach { info ->
-                        ExecutionMethodHelpLine(info = info)
+                        ExecutionMethodOptionRow(
+                            info = info,
+                            selected = selectedMethodId == info.id,
+                            onClick = {
+                                onChange(info.id)
+                                onDismiss()
+                            },
+                        )
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text("Cancel")
             }
         },
     )
 }
 
 @Composable
-private fun ExecutionMethodHelpLine(info: ExecutionMethodInfo) {
+private fun ExecutionMethodOptionRow(
+    info: ExecutionMethodInfo,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     Card(
+        modifier = Modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHighest
+            },
         ),
     ) {
         Row(
@@ -616,18 +617,10 @@ private fun ExecutionMethodHelpLine(info: ExecutionMethodInfo) {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer,
-            ) {
-                Text(
-                    text = info.label.first().toString(),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
+            RadioButton(
+                selected = selected,
+                onClick = onClick,
+            )
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -640,12 +633,20 @@ private fun ExecutionMethodHelpLine(info: ExecutionMethodInfo) {
                 Text(
                     text = "Applies to: ${info.appliesTo}",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                 )
                 Text(
                     text = info.note,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
         }
@@ -669,7 +670,7 @@ private fun PrivilegedExecutionMethodSelector(
     onChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var showDialog by remember { mutableStateOf(false) }
     val selectedLabel = selectedMethodId?.let(::executionMethodLabel) ?: "Not detected yet"
 
     Box(modifier = modifier) {
@@ -677,7 +678,7 @@ private fun PrivilegedExecutionMethodSelector(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp)
-                .clickable { expanded = true },
+                .clickable { showDialog = true },
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
         ) {
@@ -692,26 +693,21 @@ private fun PrivilegedExecutionMethodSelector(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "⌄",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = "Change",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            privilegedExecutionOptions.forEach { methodId ->
-                DropdownMenuItem(
-                    text = { Text(executionMethodLabel(methodId)) },
-                    onClick = {
-                        onChange(methodId)
-                        expanded = false
-                    },
-                )
-            }
-        }
+    }
+
+    if (showDialog) {
+        ExecutionMethodSelectionDialog(
+            selectedMethodId = selectedMethodId,
+            onChange = onChange,
+            onDismiss = { showDialog = false },
+        )
     }
 }
 
