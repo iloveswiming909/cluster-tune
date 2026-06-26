@@ -102,40 +102,39 @@ class PrivilegedExecutionResolverTest {
     }
 
     @Test
-    fun `pserver file output read uses stdout when available`() {
+    fun `pserver file output read uses script internal file write when stdout is empty`() {
+        val outputDir = temporaryDirectory()
+        val scriptDir = temporaryDirectory()
+        val sourceFile = File(outputDir, "sys-value.txt").also { it.writeText("24") }
         val method = PServerFileOutputExecutionMethod(
             context = null,
-            rootExec = FakePServerRootExecutor(
-                mapOf("cat '/sys/value' 2>/dev/null" to "42"),
-            ),
-            outputDirectory = temporaryDirectory(),
+            rootExec = ShellBackedNoStdoutPServerExecutor(),
+            outputDirectory = outputDir,
+            scriptDirectory = scriptDir,
         )
 
-        assertEquals("42", method.readText("/sys/value"))
+        assertEquals("24", method.readText(sourceFile.absolutePath))
     }
 
     @Test
-    fun `pserver file output read falls back to readable file when stdout is empty`() {
+    fun `pserver file output executes external script without stdout`() {
+        val outputDir = temporaryDirectory()
+        val scriptDir = temporaryDirectory()
+        val sideEffect = File(outputDir, "side-effect.txt")
         val method = PServerFileOutputExecutionMethod(
             context = null,
-            rootExec = object : PServerRootExecutor {
-                override val pServerAvailable: Boolean = true
-
-                override fun executeAsRoot(cmd: String): Result<String?> {
-                    if (cmd == "cat '/sys/value' 2>/dev/null") {
-                        return Result.success(null)
-                    }
-                    val outputPath = Regex("> '([^']+)'").find(cmd)?.groupValues?.get(1)
-                    if (outputPath != null) {
-                        File(outputPath).writeText("24")
-                    }
-                    return Result.success(null)
-                }
-            },
-            outputDirectory = temporaryDirectory(),
+            rootExec = ShellBackedNoStdoutPServerExecutor(),
+            outputDirectory = outputDir,
+            scriptDirectory = scriptDir,
         )
 
-        assertEquals("24", method.readText("/sys/value"))
+        val output = method.executeScript(
+            "apply.sh",
+            "echo landed > ${shellQuote(sideEffect.absolutePath)}\necho log-line\n",
+        ).getOrThrow()
+
+        assertEquals("landed", sideEffect.readText().trim())
+        assertNull(output)
     }
 
     private class FakeExecutionMethod(
@@ -161,13 +160,20 @@ class PrivilegedExecutionResolverTest {
         }
     }
 
-    private class FakePServerRootExecutor(
-        private val outputs: Map<String, String?>,
-    ) : PServerRootExecutor {
+    private class ShellBackedNoStdoutPServerExecutor : PServerRootExecutor {
         override val pServerAvailable: Boolean = true
 
         override fun executeAsRoot(cmd: String): Result<String?> {
-            return Result.success(outputs[cmd])
+            val process = ProcessBuilder("sh", "-c", cmd)
+                .redirectErrorStream(true)
+                .start()
+            process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            return if (exitCode == 0) {
+                Result.success(null)
+            } else {
+                Result.failure(IllegalStateException("shell exited $exitCode"))
+            }
         }
     }
 

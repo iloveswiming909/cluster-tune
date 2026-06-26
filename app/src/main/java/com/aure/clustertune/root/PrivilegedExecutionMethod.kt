@@ -182,6 +182,7 @@ class PServerFileOutputExecutionMethod(
     private val context: Context?,
     private val rootExec: PServerRootExecutor = RootExec(),
     private val outputDirectory: File? = null,
+    private val scriptDirectory: File? = null,
 ) : PrivilegedExecutionMethod {
     override val id: String = "pserver-file-output"
 
@@ -214,45 +215,24 @@ class PServerFileOutputExecutionMethod(
 
     override fun executeScript(scriptName: String, scriptContents: String): Result<String?> {
         return runCatching {
-            val scriptFile = writeScriptFile(requireContext(), scriptName, scriptContents)
-            val outputFile = outputFile("${scriptFile.name}.out")
-            outputFile.delete()
-            val directOutput = rootExec.executeAsRoot("sh ${shellQuote(scriptFile.absolutePath)}")
-                .getOrNull()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            if (directOutput != null) {
-                return@runCatching directOutput
-            }
-            val command = buildString {
-                append("sh ${shellQuote(scriptFile.absolutePath)}")
-                append(" > ${shellQuote(outputFile.absolutePath)} 2>&1")
-                append("; status=${'$'}?")
-                append("; chmod 666 ${shellQuote(outputFile.absolutePath)} 2>/dev/null")
-                append("; exit ${'$'}status")
-            }
-            rootExec.executeAsRoot(command).getOrThrow()
-            outputFile.takeIf { it.isFile }
-                ?.readText()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
+            val scriptFile = writeFallbackScriptFile(scriptName, scriptContents)
+            rootExec.executeAsRoot("sh ${shellQuote(scriptFile.absolutePath)}").getOrThrow()
+            null
         }
     }
 
     override fun readText(path: String): String? {
-        rootExec.executeAsRoot("cat ${shellQuote(path)} 2>/dev/null")
-            .getOrNull()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { return it }
-
-        val outputFile = outputFile("read-text.out")
+        val outputFile = outputFile("read.txt")
         outputFile.delete()
-        val command = buildString {
-            append("cat ${shellQuote(path)} > ${shellQuote(outputFile.absolutePath)} 2>/dev/null")
-            append(" && chmod 666 ${shellQuote(outputFile.absolutePath)}")
-        }
-        val result = rootExec.executeAsRoot(command)
+        val scriptFile = writeFallbackScriptFile(
+            "read-text.sh",
+            buildString {
+                appendLine("#!/system/bin/sh")
+                appendLine("cat ${shellQuote(path)} > ${shellQuote(outputFile.absolutePath)} 2>/dev/null")
+                appendLine("chmod 666 ${shellQuote(outputFile.absolutePath)} 2>/dev/null")
+            },
+        )
+        val result = rootExec.executeAsRoot("sh ${shellQuote(scriptFile.absolutePath)}")
         if (result.isFailure) return null
         return outputFile.takeIf { it.isFile }
             ?.readText()
@@ -261,7 +241,7 @@ class PServerFileOutputExecutionMethod(
     }
 
     private fun outputFile(name: String): File {
-        val dir = outputDirectory ?: File(requireContext().filesDir, "root-output")
+        val dir = outputDirectory ?: File(appOwnedExternalFallbackDirectory(), "root-output")
         if (!dir.exists()) {
             dir.mkdirs()
         }
@@ -270,6 +250,28 @@ class PServerFileOutputExecutionMethod(
 
     private fun requireContext(): Context {
         return requireNotNull(context) { "Context is required for PServer file-output script execution" }
+    }
+
+    private fun writeFallbackScriptFile(scriptName: String, scriptContents: String): File {
+        val scriptDir = scriptDirectory ?: File(appOwnedFallbackDirectory(), "root-scripts")
+        if (!scriptDir.exists()) {
+            scriptDir.mkdirs()
+        }
+        val scriptFile = File(scriptDir, scriptName)
+        scriptFile.writeText(scriptContents)
+        scriptFile.setReadable(true, false)
+        scriptFile.setExecutable(true, false)
+        return scriptFile
+    }
+
+    private fun appOwnedFallbackDirectory(): File {
+        return File(requireContext().filesDir, "pserver-fallback")
+    }
+
+    private fun appOwnedExternalFallbackDirectory(): File {
+        return requireNotNull(requireContext().getExternalFilesDir(null)) {
+            "External files directory is required for PServer fallback output"
+        }
     }
 }
 
