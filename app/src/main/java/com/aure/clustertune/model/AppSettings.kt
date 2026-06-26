@@ -14,6 +14,7 @@ enum class TileInteractionBehavior {
 data class AppSettings(
     val colorSource: AppColorSource = AppColorSource.SYSTEM,
     val accentColor: Int = 0xFF3F51B5.toInt(),
+    val customAccentColor: Int = 0xFF3F51B5.toInt(),
     val tileTapBehavior: TileInteractionBehavior = TileInteractionBehavior.SHOW_DIALOG,
     val applyLastProfileOnBoot: Boolean = false,
     val sleepProfileEnabled: Boolean = false,

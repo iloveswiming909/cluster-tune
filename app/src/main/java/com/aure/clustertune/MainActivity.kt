@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { showSettings = false },
                             onColorSourceChange = viewModel::setColorSource,
                             onAccentColorChange = viewModel::setAccentColor,
+                            onCustomAccentColorChange = viewModel::setCustomAccentColor,
                             onTileTapBehaviorChange = { behavior ->
                                 viewModel.setTileTapBehavior(behavior) {
                                     QuickSettingsTileRefresher.requestUpdate(this@MainActivity)

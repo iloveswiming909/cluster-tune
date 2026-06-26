@@ -247,6 +247,12 @@ class TunerViewModel(
         }
     }
 
+    fun setCustomAccentColor(accentColor: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistCustomAccentColor(accentColor)
+        }
+    }
+
     fun setAutomaticUpdateChecksEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsStorage.persistAutomaticUpdateChecksEnabled(enabled)

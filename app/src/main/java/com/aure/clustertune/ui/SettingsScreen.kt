@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,8 +26,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Terminal
+
+import androidx.compose.material.icons.rounded.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -59,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,6 +134,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onColorSourceChange: (AppColorSource) -> Unit,
     onAccentColorChange: (Int) -> Unit,
+    onCustomAccentColorChange: (Int) -> Unit,
     onTileTapBehaviorChange: (TileInteractionBehavior) -> Unit,
     onApplyLastProfileOnBootChange: (Boolean) -> Unit,
     sleepProfileOptions: List<PerformanceProfile>,
@@ -175,16 +185,18 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Appearance") {
+        SettingsSection(title = "Appearance", icon = Icons.Rounded.Palette) {
             ThemeModeSelector(
                 selected = settings.colorSource,
                 onChange = onColorSourceChange,
                 selectedAccentColor = settings.accentColor,
+                customAccentColor = settings.customAccentColor,
                 onAccentColorChange = onAccentColorChange,
+                onCustomAccentColorChange = onCustomAccentColorChange,
             )
         }
 
-        SettingsSection(title = "Updates") {
+        SettingsSection(title = "Updates", icon = Icons.Rounded.Update) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -217,7 +229,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Quick Settings Tile") {
+        SettingsSection(title = "Quick Settings Tile", icon = Icons.Rounded.GridView) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -258,7 +270,7 @@ fun SettingsScreen(
             onShowHelp = { showExecutionMethodHelp = true },
         )
 
-        SettingsSection(title = "Startup") {
+        SettingsSection(title = "Startup", icon = Icons.Rounded.PowerSettingsNew) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -285,7 +297,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Sleep") {
+        SettingsSection(title = "Sleep", icon = Icons.Rounded.Bedtime) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -328,7 +340,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Profiles") {
+        SettingsSection(title = "Profiles", icon = Icons.Rounded.SwapVert) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -455,7 +467,7 @@ private fun DeviceExecutionMethodCard(
                         color = MaterialTheme.colorScheme.primaryContainer,
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Tune,
+                            imageVector = Icons.Rounded.Terminal,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(10.dp),
@@ -542,7 +554,7 @@ private fun ExecutionMethodHelpDialog(onDismiss: () -> Unit) {
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Tune,
+                        imageVector = Icons.Rounded.Terminal,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(10.dp),
@@ -664,12 +676,13 @@ private fun PrivilegedExecutionMethodSelector(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(40.dp)
                 .clickable { expanded = true },
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier.padding(horizontal = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -763,7 +776,9 @@ private fun ThemeModeSelector(
     selected: AppColorSource,
     onChange: (AppColorSource) -> Unit,
     selectedAccentColor: Int,
+    customAccentColor: Int,
     onAccentColorChange: (Int) -> Unit,
+    onCustomAccentColorChange: (Int) -> Unit,
 ) {
     var showColorPicker by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
@@ -792,14 +807,15 @@ private fun ThemeModeSelector(
                 },
             )
         }
-        val customColor = Color(selectedAccentColor)
+        val customColor = Color(customAccentColor)
         AppearancePill(
             label = "Custom",
-            selected = selected == AppColorSource.CUSTOM_ACCENT && selectedAccentColor !in accentColorOptions,
+            selected = selected == AppColorSource.CUSTOM_ACCENT && selectedAccentColor == customAccentColor,
             containerColor = customColor,
             contentColor = if (customColor.luminance() > 0.5f) Color.Black else Color.White,
             onClick = {
                 onChange(AppColorSource.CUSTOM_ACCENT)
+                onAccentColorChange(customAccentColor)
                 showColorPicker = true
             },
         )
@@ -807,11 +823,11 @@ private fun ThemeModeSelector(
 
     if (showColorPicker) {
         AccentColorPickerDialog(
-            initialColor = selectedAccentColor,
+            initialColor = customAccentColor,
             onDismiss = { showColorPicker = false },
             onColorSelected = { color ->
                 onChange(AppColorSource.CUSTOM_ACCENT)
-                onAccentColorChange(color)
+                onCustomAccentColorChange(color)
                 showColorPicker = false
             },
         )
@@ -1088,6 +1104,7 @@ private fun SettingsControlGroup(
 @Composable
 private fun SettingsSection(
     title: String,
+    icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
@@ -1103,12 +1120,36 @@ private fun SettingsSection(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
+            SettingsSectionTitle(title = title, icon = icon)
             content()
         }
+    }
+}
+
+@Composable
+private fun SettingsSectionTitle(
+    title: String,
+    icon: ImageVector,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(10.dp),
+            )
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }

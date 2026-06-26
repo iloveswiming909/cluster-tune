@@ -15,6 +15,15 @@ import kotlinx.coroutines.flow.map
 
 private val Context.settingsDataStore by preferencesDataStore(name = "android_tuner_settings")
 
+private val bundledAccentColors = setOf(
+    0xFF3F51B5.toInt(),
+    0xFF006E1C.toInt(),
+    0xFFB3261E.toInt(),
+    0xFF8E24AA.toInt(),
+    0xFF00639A.toInt(),
+    0xFF9A4600.toInt(),
+)
+
 class SettingsStorage(private val context: Context) {
 
     private val tileTapBehaviorKey = stringPreferencesKey("tile_tap_behavior")
@@ -25,6 +34,7 @@ class SettingsStorage(private val context: Context) {
     private val quickSettingsTileAddedKey = booleanPreferencesKey("quick_settings_tile_added")
     private val colorSourceKey = stringPreferencesKey("color_source")
     private val accentColorKey = intPreferencesKey("accent_color")
+    private val customAccentColorKey = intPreferencesKey("custom_accent_color")
     private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
     private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
     private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
@@ -36,6 +46,9 @@ class SettingsStorage(private val context: Context) {
                 ?.let(::parseColorSource)
                 ?: AppColorSource.SYSTEM,
             accentColor = preferences[accentColorKey] ?: 0xFF3F51B5.toInt(),
+            customAccentColor = preferences[customAccentColorKey]
+                ?: preferences[accentColorKey]?.takeIf { accentColor -> accentColor !in bundledAccentColors }
+                ?: 0xFF3F51B5.toInt(),
             tileTapBehavior = preferences[tileTapBehaviorKey]
                 ?.let(::parseBehavior)
                 ?: TileInteractionBehavior.SHOW_DIALOG,
@@ -111,6 +124,13 @@ class SettingsStorage(private val context: Context) {
     suspend fun persistAccentColor(accentColor: Int) {
         context.settingsDataStore.edit { preferences ->
             preferences[accentColorKey] = accentColor
+        }
+    }
+
+    suspend fun persistCustomAccentColor(accentColor: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[accentColorKey] = accentColor
+            preferences[customAccentColorKey] = accentColor
         }
     }
 
