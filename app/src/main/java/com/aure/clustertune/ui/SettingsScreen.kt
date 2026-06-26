@@ -2,7 +2,9 @@ package com.aure.clustertune.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -51,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -755,71 +759,85 @@ private fun ThemeModeSelector(
     selectedAccentColor: Int,
     onAccentColorChange: (Int) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        ThemeModeOption(
-            title = "System colors",
+    var showColorPicker by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AppearancePill(
+            label = "System",
             selected = selected == AppColorSource.SYSTEM,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             onClick = { onChange(AppColorSource.SYSTEM) },
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(
-                selected = selected == AppColorSource.CUSTOM_ACCENT,
-                onClick = { onChange(AppColorSource.CUSTOM_ACCENT) },
+        accentColorOptions.forEach { accentColor ->
+            AccentSwatch(
+                color = Color(accentColor),
+                selected = selected == AppColorSource.CUSTOM_ACCENT && selectedAccentColor == accentColor,
+                onClick = {
+                    onChange(AppColorSource.CUSTOM_ACCENT)
+                    onAccentColorChange(accentColor)
+                },
             )
-            Text(
-                text = "Custom",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-            Row(
-                modifier = Modifier.padding(start = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                accentColorOptions.forEach { accentColor ->
-                    AccentSwatch(
-                        color = Color(accentColor),
-                        selected = selectedAccentColor == accentColor,
-                        onClick = {
-                            onChange(AppColorSource.CUSTOM_ACCENT)
-                            onAccentColorChange(accentColor)
-                        },
-                    )
-                }
-            }
         }
+        val customColor = Color(selectedAccentColor)
+        AppearancePill(
+            label = "Custom",
+            selected = selected == AppColorSource.CUSTOM_ACCENT && selectedAccentColor !in accentColorOptions,
+            containerColor = customColor,
+            contentColor = if (customColor.luminance() > 0.5f) Color.Black else Color.White,
+            onClick = {
+                onChange(AppColorSource.CUSTOM_ACCENT)
+                showColorPicker = true
+            },
+        )
+    }
+
+    if (showColorPicker) {
+        AccentColorPickerDialog(
+            initialColor = selectedAccentColor,
+            onDismiss = { showColorPicker = false },
+            onColorSelected = { color ->
+                onChange(AppColorSource.CUSTOM_ACCENT)
+                onAccentColorChange(color)
+                showColorPicker = false
+            },
+        )
     }
 }
 
 @Composable
-private fun ThemeModeOption(
-    title: String,
+private fun AppearancePill(
+    label: String,
     selected: Boolean,
+    containerColor: Color,
+    contentColor: Color,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = containerColor,
+        tonalElevation = if (selected) 4.dp else 0.dp,
+        shadowElevation = if (selected) 1.dp else 0.dp,
+        border = BorderStroke(
+            width = if (selected) 3.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+        ),
     ) {
-        RadioButton(
-            selected = selected,
-            onClick = onClick,
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor,
+            fontWeight = FontWeight.SemiBold,
         )
-        Column(
-            modifier = Modifier
-                .padding(start = 8.dp)
-                .weight(1f),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
     }
 }
 
@@ -831,7 +849,7 @@ private fun AccentSwatch(
 ) {
     Box(
         modifier = Modifier
-            .size(28.dp)
+            .size(42.dp)
             .background(color, CircleShape)
             .border(
                 width = if (selected) 3.dp else 1.dp,
@@ -840,6 +858,112 @@ private fun AccentSwatch(
             )
             .clickable(onClick = onClick),
     )
+}
+
+@Composable
+private fun AccentColorPickerDialog(
+    initialColor: Int,
+    onDismiss: () -> Unit,
+    onColorSelected: (Int) -> Unit,
+) {
+    var red by remember(initialColor) { mutableStateOf((initialColor ushr 16) and 0xFF) }
+    var green by remember(initialColor) { mutableStateOf((initialColor ushr 8) and 0xFF) }
+    var blue by remember(initialColor) { mutableStateOf(initialColor and 0xFF) }
+    val previewColorInt = argbColor(red, green, blue)
+    val previewColor = Color(previewColorInt)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom color") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    color = previewColor,
+                ) {
+                    Text(
+                        text = "Preview",
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (previewColor.luminance() > 0.5f) Color.Black else Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                ColorChannelSlider(
+                    label = "Red",
+                    value = red,
+                    color = Color(0xFFB3261E),
+                    onChange = { red = it },
+                )
+                ColorChannelSlider(
+                    label = "Green",
+                    value = green,
+                    color = Color(0xFF006E1C),
+                    onChange = { green = it },
+                )
+                ColorChannelSlider(
+                    label = "Blue",
+                    value = blue,
+                    color = Color(0xFF3F51B5),
+                    onChange = { blue = it },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onColorSelected(previewColorInt) }) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ColorChannelSlider(
+    label: String,
+    value: Int,
+    color: Color,
+    onChange: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = value.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(it.toInt().coerceIn(0, 255)) },
+            valueRange = 0f..255f,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = color,
+                activeTrackColor = color,
+            ),
+        )
+    }
+}
+
+private fun argbColor(red: Int, green: Int, blue: Int): Int {
+    return ((0xFF shl 24) or
+        (red.coerceIn(0, 255) shl 16) or
+        (green.coerceIn(0, 255) shl 8) or
+        blue.coerceIn(0, 255))
 }
 
 @Composable
