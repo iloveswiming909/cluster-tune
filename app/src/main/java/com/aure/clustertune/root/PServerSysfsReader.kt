@@ -11,4 +11,8 @@ class PServerSysfsReader(
     override fun readText(path: String): String? {
         return executionResolver.readText(path)
     }
+
+    override fun makeReadable(path: String): Boolean {
+        return executionResolver.makeReadable(path)
+    }
 }

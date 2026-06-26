@@ -25,6 +25,8 @@ interface PrivilegedExecutionMethod {
     ): Result<String?>
 
     fun readText(path: String): String?
+
+    fun makeReadable(path: String): Boolean = false
 }
 
 class PrivilegedExecutionResolver(
@@ -115,6 +117,10 @@ class PrivilegedExecutionResolver(
         return selectedMethod()?.readText(path)
     }
 
+    fun makeReadable(path: String): Boolean {
+        return selectedMethod()?.makeReadable(path) == true
+    }
+
     companion object {
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",
@@ -175,6 +181,10 @@ class PServerStdoutExecutionMethod(
             .getOrNull()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+    }
+
+    override fun makeReadable(path: String): Boolean {
+        return rootExec.executeAsRoot("chmod 444 ${shellQuote(path)} 2>/dev/null").isSuccess
     }
 }
 
@@ -238,6 +248,17 @@ class PServerFileOutputExecutionMethod(
             ?.readText()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+    }
+
+    override fun makeReadable(path: String): Boolean {
+        val scriptFile = writeFallbackScriptFile(
+            "chmod-readable.sh",
+            buildString {
+                appendLine("#!/system/bin/sh")
+                appendLine("chmod 444 ${shellQuote(path)} 2>/dev/null")
+            },
+        )
+        return rootExec.executeAsRoot("sh ${shellQuote(scriptFile.absolutePath)}").isSuccess
     }
 
     private fun outputFile(name: String): File {
@@ -304,6 +325,10 @@ class RootShellExecutionMethod(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
     }
+
+    override fun makeReadable(path: String): Boolean {
+        return runner.run("chmod 444 ${shellQuote(path)} 2>/dev/null", timeoutSeconds = 10).exitCode == 0
+    }
 }
 
 class ShizukuExecutionMethod(
@@ -348,6 +373,10 @@ class ShizukuExecutionMethod(
             ?.stdout
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+    }
+
+    override fun makeReadable(path: String): Boolean {
+        return runner.run("chmod 444 ${shellQuote(path)} 2>/dev/null", timeoutSeconds = 10).exitCode == 0
     }
 }
 

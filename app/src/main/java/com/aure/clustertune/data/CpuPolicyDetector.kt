@@ -109,6 +109,12 @@ class CpuPolicyDetector(
     private fun readText(path: String): String? {
         val direct = fileSystem.readText(path)?.trim()?.takeIf { it.isNotEmpty() }
         if (direct != null) return direct
+
+        if (privilegedReader.makeReadable(path)) {
+            val afterChmod = fileSystem.readText(path)?.trim()?.takeIf { it.isNotEmpty() }
+            if (afterChmod != null) return afterChmod
+        }
+
         return privilegedReader
             .readText(path)
             ?.trim()

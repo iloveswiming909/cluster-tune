@@ -312,6 +312,34 @@ class CpuPolicyDetectorTest {
         assertEquals(listOf(300_000, 1_228_800, 2_745_600), result.supportedFrequencies)
     }
 
+    @Test
+    fun `chmods protected files before falling back to privileged read`() {
+        val policyPath = "/sys/devices/system/cpu/cpufreq/policy0"
+        val protectedFiles = mapOf(
+            "$policyPath/scaling_available_frequencies" to "300000 1228800 2745600",
+            "$policyPath/cpuinfo_max_freq" to "2745600",
+            "$policyPath/scaling_max_freq" to "1228800",
+            "$policyPath/scaling_min_freq" to "300000",
+        )
+        val fileSystem = PermissionChangingSysfsFileSystem(
+            directories = listOf(policyPath),
+            files = protectedFiles,
+        )
+        val privilegedReader = ChmodOnlyPrivilegedSysfsReader(fileSystem)
+        val detector = CpuPolicyDetector(
+            fileSystem = fileSystem,
+            privilegedReader = privilegedReader,
+        )
+
+        val result = detector.detectPolicies().single()
+
+        assertEquals(0, result.id)
+        assertEquals(1_228_800, result.currentMaxFreq)
+        assertEquals(listOf(300_000, 1_228_800, 2_745_600), result.supportedFrequencies)
+        assertTrue(privilegedReader.chmodCalls.isNotEmpty())
+        assertTrue(privilegedReader.readCalls.none { it in protectedFiles.keys })
+    }
+
     private class FakeSysfsFileSystem(
         private val directories: List<String>,
         val files: Map<String, String>,
@@ -324,6 +352,45 @@ class CpuPolicyDetectorTest {
         private val files: Map<String, String>,
     ) : PrivilegedSysfsReader {
         override fun readText(path: String): String? = files[path]
+    }
+
+    private class PermissionChangingSysfsFileSystem(
+        private val directories: List<String>,
+        private val files: Map<String, String>,
+    ) : SysfsFileSystem {
+        private val readablePaths = mutableSetOf<String>()
+
+        override fun listPolicyDirectories(root: String): List<String> = directories
+
+        override fun readText(path: String): String? {
+            return files[path]?.takeIf { path in readablePaths }
+        }
+
+        fun makeReadable(path: String): Boolean {
+            return if (path in files) {
+                readablePaths += path
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private class ChmodOnlyPrivilegedSysfsReader(
+        private val fileSystem: PermissionChangingSysfsFileSystem,
+    ) : PrivilegedSysfsReader {
+        val chmodCalls = mutableListOf<String>()
+        val readCalls = mutableListOf<String>()
+
+        override fun readText(path: String): String? {
+            readCalls += path
+            return null
+        }
+
+        override fun makeReadable(path: String): Boolean {
+            chmodCalls += path
+            return fileSystem.makeReadable(path)
+        }
     }
 
     private class FakePrivilegedSysfsLister(
