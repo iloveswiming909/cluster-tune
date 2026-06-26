@@ -1,6 +1,7 @@
 package com.aure.clustertune.data
 
 import com.aure.clustertune.model.CpuPolicyInfo
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
@@ -23,6 +24,7 @@ private data class StorageState(
     val deletedBundledProfileIds: Set<String>,
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
+    val appProfileAssignments: List<AppProfileAssignment>,
     val selectedProfileId: String?,
     val lastAppliedDisplayProfileId: String?,
 )
@@ -32,6 +34,7 @@ private data class PartialStorageState(
     val deletedBundledProfileIds: Set<String>,
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
+    val appProfileAssignments: List<AppProfileAssignment>,
 )
 
 internal data class ImportedProfileMerge(
@@ -66,12 +69,14 @@ class PerformanceRepository(
             profileStorage.deletedBundledProfileIds,
             profileStorage.displayOrder,
             profileStorage.lastValues,
-        ) { storedProfiles, deletedBundledProfileIds, displayOrder, lastValues ->
+            profileStorage.appProfileAssignments,
+        ) { storedProfiles, deletedBundledProfileIds, displayOrder, lastValues, appProfileAssignments ->
             PartialStorageState(
                 storedProfiles = storedProfiles,
                 deletedBundledProfileIds = deletedBundledProfileIds,
                 displayOrder = displayOrder,
                 lastValues = lastValues,
+                appProfileAssignments = appProfileAssignments,
             )
         }
         val completeStorageState = combine(
@@ -84,6 +89,7 @@ class PerformanceRepository(
                 deletedBundledProfileIds = partial.deletedBundledProfileIds,
                 displayOrder = partial.displayOrder,
                 lastValues = partial.lastValues,
+                appProfileAssignments = partial.appProfileAssignments,
                 selectedProfileId = selectedProfileId,
                 lastAppliedDisplayProfileId = lastAppliedDisplayProfileId,
             )
@@ -158,6 +164,9 @@ class PerformanceRepository(
                                 stockProfile = stockProfile,
                                 orderedIds = storage.displayOrder,
                             ),
+                            appProfileAssignments = storage.appProfileAssignments.filter { assignment ->
+                                orderedRealProfiles.any { profile -> profile.id == assignment.profileId }
+                            },
                         ),
                     ),
                 )
@@ -416,6 +425,58 @@ class PerformanceRepository(
         if (profileStorage.selectedProfileId.first() == profileId) {
             profileStorage.persistSelectedProfile(null)
         }
+    }
+
+    suspend fun saveAppProfileAssignment(assignment: AppProfileAssignment) {
+        val state = observeState().first()
+        val profile = state.displayProfiles.firstOrNull { it.id == assignment.profileId } ?: return
+        profileStorage.saveAppProfileAssignment(
+            assignment.copy(
+                appLabel = assignment.appLabel.ifBlank { assignment.packageName },
+                profileId = profile.id,
+            ),
+        )
+    }
+
+    suspend fun deleteAppProfileAssignment(packageName: String) {
+        profileStorage.deleteAppProfileAssignment(packageName)
+    }
+
+    suspend fun applyProfileTemporarily(profileId: String): Result<ApplyOutcome> {
+        val state = observeState().first()
+        if (!state.isPServerAvailable || state.policies.isEmpty()) {
+            return Result.failure(IllegalStateException("Profile automation is unavailable"))
+        }
+        val profile = state.displayProfiles.firstOrNull { it.id == profileId }
+            ?: return Result.failure(IllegalStateException("App profile is unavailable"))
+        return applyValuesInternal(
+            policies = state.policies,
+            selectedValues = profile.maxFrequencies,
+            isReset = profile.id == ProfileStateResolver.STOCK_PROFILE_ID,
+            appliedDisplayProfileId = profile.id,
+            persistNormalState = false,
+        )
+    }
+
+    suspend fun restoreNormalProfileTemporarily(): Result<ApplyOutcome> {
+        val state = observeState().first()
+        if (!state.isPServerAvailable || state.policies.isEmpty()) {
+            return Result.failure(IllegalStateException("Profile automation is unavailable"))
+        }
+        val restoreProfileId = profileStorage.lastAppliedDisplayProfileId.first()
+        val restoreProfile = restoreProfileId?.let { id ->
+            state.displayProfiles.firstOrNull { it.id == id }
+        }
+        val restoreValues = restoreProfile?.maxFrequencies
+            ?: profileStorage.lastValues.first().takeIf { it.isNotEmpty() }
+            ?: return Result.failure(IllegalStateException("No previous profile to restore"))
+        return applyValuesInternal(
+            policies = state.policies,
+            selectedValues = restoreValues,
+            isReset = restoreProfileId == ProfileStateResolver.STOCK_PROFILE_ID,
+            appliedDisplayProfileId = restoreProfileId,
+            persistNormalState = false,
+        )
     }
 
     suspend fun moveProfile(profileId: String, offset: Int) {

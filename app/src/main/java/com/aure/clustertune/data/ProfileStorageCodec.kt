@@ -1,5 +1,6 @@
 package com.aure.clustertune.data
 
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileSource
 import kotlinx.serialization.SerialName
@@ -75,6 +76,36 @@ object ProfileStorageCodec {
         return runCatching { json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
     }
 
+    fun encodeAppProfileAssignments(assignments: List<AppProfileAssignment>): String {
+        return json.encodeToString<List<StoredAppProfileAssignment>>(
+            assignments.sortedBy { it.appLabel.lowercase() }.map { assignment ->
+                StoredAppProfileAssignment(
+                    packageName = assignment.packageName,
+                    appLabel = assignment.appLabel,
+                    profileId = assignment.profileId,
+                )
+            },
+        )
+    }
+
+    fun parseAppProfileAssignments(raw: String?): List<AppProfileAssignment> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<StoredAppProfileAssignment>>(raw)
+                .mapNotNull { assignment ->
+                    val packageName = assignment.packageName.trim()
+                    val profileId = assignment.profileId.trim()
+                    if (packageName.isBlank() || profileId.isBlank()) return@mapNotNull null
+                    AppProfileAssignment(
+                        packageName = packageName,
+                        appLabel = assignment.appLabel.ifBlank { packageName },
+                        profileId = profileId,
+                    )
+                }
+                .sortedBy { it.appLabel.lowercase() }
+        }.getOrDefault(emptyList())
+    }
+
     private fun parseSource(raw: String): ProfileSource {
         return runCatching { ProfileSource.valueOf(raw) }.getOrDefault(ProfileSource.USER)
     }
@@ -89,5 +120,12 @@ object ProfileStorageCodec {
         val isDeletable: Boolean = true,
         @SerialName("maxFrequencies")
         val maxFrequencies: Map<String, Int> = emptyMap(),
+    )
+
+    @Serializable
+    private data class StoredAppProfileAssignment(
+        val packageName: String,
+        val appLabel: String,
+        val profileId: String,
     )
 }

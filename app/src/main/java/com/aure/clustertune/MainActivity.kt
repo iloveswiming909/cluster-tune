@@ -1,10 +1,12 @@
 package com.aure.clustertune
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.aure.clustertune.apps.AppProfileMonitorService
 import com.aure.clustertune.sleep.SleepProfileMonitorService
 import com.aure.clustertune.tile.QuickSettingsTileAddResult
 import com.aure.clustertune.tile.QuickSettingsTilePrompt
@@ -51,6 +54,7 @@ class MainActivity : ComponentActivity() {
             repository = container.repository,
             settingsStorage = container.settingsStorage,
             privilegedExecutionResolver = container.privilegedExecutionResolver,
+            installedAppRepository = container.installedAppRepository,
         )
     }
     private val exportProfilesLauncher = registerForActivityResult(
@@ -80,12 +84,14 @@ class MainActivity : ComponentActivity() {
         maybeRequestQuickSettingsTileOnFirstRun()
         maybeAutoDetectPrivilegedExecutionOnFirstRun()
         maybeCheckForUpdatesOnLaunch()
+        maybeStartAppProfileMonitor()
 
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
             ClusterTuneTheme(settings = settings) {
                 Surface {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
+                    val launchableApps = viewModel.launchableApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
 
                     if (showSettings) {
@@ -148,6 +154,13 @@ class MainActivity : ComponentActivity() {
                             onUpdateProfile = viewModel::updateProfile,
                             onDeleteProfile = viewModel::deleteProfile,
                             onMoveProfile = viewModel::moveProfile,
+                            launchableApps = launchableApps,
+                            onSaveAppProfileAssignment = { packageName, appLabel, profileId ->
+                                viewModel.saveAppProfileAssignment(packageName, appLabel, profileId)
+                                startAppProfileMonitor()
+                            },
+                            onDeleteAppProfileAssignment = viewModel::deleteAppProfileAssignment,
+                            onRefreshInstalledApps = viewModel::refreshInstalledApps,
                             onOpenSettings = { showSettings = true },
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,
@@ -180,6 +193,26 @@ class MainActivity : ComponentActivity() {
         SleepProfileMonitorService.start(this)
     }
 
+    private fun startAppProfileMonitor() {
+        if (!AppProfileMonitorService.hasUsageStatsPermission(this)) {
+            Toast.makeText(
+                this,
+                "Grant Usage Access to enable per-app profiles",
+                Toast.LENGTH_LONG,
+            ).show()
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        AppProfileMonitorService.start(this)
+    }
+
     private fun maybeRequestQuickSettingsTileOnFirstRun() {
         lifecycleScope.launch {
             val settings = container.settingsStorage.settings.first()
@@ -199,6 +232,16 @@ class MainActivity : ComponentActivity() {
 
             val methodId = container.privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
             container.settingsStorage.persistPrivilegedExecutionMethodId(methodId)
+        }
+    }
+
+    private fun maybeStartAppProfileMonitor() {
+        lifecycleScope.launch {
+            if (container.repository.observeState().first().appProfileAssignments.isNotEmpty() &&
+                AppProfileMonitorService.hasUsageStatsPermission(this@MainActivity)
+            ) {
+                startAppProfileMonitor()
+            }
         }
     }
 
@@ -414,3 +457,4 @@ private fun UpdateAvailableDialog(
         },
     )
 }
+

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileSource
 import kotlinx.coroutines.flow.Flow
@@ -22,6 +23,7 @@ class ProfileStorage(private val context: Context) {
     private val sleepRestoreDisplayProfileKey = stringPreferencesKey("sleep_restore_display_profile")
     private val deletedBundledProfileIdsKey = stringSetPreferencesKey("deleted_bundled_profile_ids")
     private val displayOrderKey = stringPreferencesKey("display_order")
+    private val appProfileAssignmentsKey = stringPreferencesKey("app_profile_assignments")
 
     val profiles: Flow<List<PerformanceProfile>> = context.dataStore.data.map { preferences ->
         ProfileStorageCodec.parseProfiles(preferences[profilesKey])
@@ -33,6 +35,10 @@ class ProfileStorage(private val context: Context) {
 
     val displayOrder: Flow<List<String>> = context.dataStore.data.map { preferences ->
         ProfileStorageCodec.parseStringList(preferences[displayOrderKey])
+    }
+
+    val appProfileAssignments: Flow<List<AppProfileAssignment>> = context.dataStore.data.map { preferences ->
+        ProfileStorageCodec.parseAppProfileAssignments(preferences[appProfileAssignmentsKey])
     }
 
     val lastValues: Flow<Map<Int, Int>> = context.dataStore.data.map { preferences ->
@@ -91,11 +97,36 @@ class ProfileStorage(private val context: Context) {
         }
     }
 
+    suspend fun saveAppProfileAssignment(assignment: AppProfileAssignment) {
+        context.dataStore.edit { preferences ->
+            val current = ProfileStorageCodec
+                .parseAppProfileAssignments(preferences[appProfileAssignmentsKey])
+                .filterNot { it.packageName == assignment.packageName }
+            preferences[appProfileAssignmentsKey] = ProfileStorageCodec.encodeAppProfileAssignments(
+                current + assignment,
+            )
+        }
+    }
+
+    suspend fun deleteAppProfileAssignment(packageName: String) {
+        context.dataStore.edit { preferences ->
+            val updated = ProfileStorageCodec
+                .parseAppProfileAssignments(preferences[appProfileAssignmentsKey])
+                .filterNot { it.packageName == packageName }
+            if (updated.isEmpty()) {
+                preferences.remove(appProfileAssignmentsKey)
+            } else {
+                preferences[appProfileAssignmentsKey] = ProfileStorageCodec.encodeAppProfileAssignments(updated)
+            }
+        }
+    }
+
     suspend fun resetProfiles() {
         context.dataStore.edit { preferences ->
             preferences.remove(profilesKey)
             preferences.remove(deletedBundledProfileIdsKey)
             preferences.remove(displayOrderKey)
+            preferences.remove(appProfileAssignmentsKey)
         }
     }
 

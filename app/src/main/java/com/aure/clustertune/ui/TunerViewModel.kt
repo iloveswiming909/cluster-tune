@@ -3,11 +3,14 @@ package com.aure.clustertune.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.aure.clustertune.data.InstalledAppRepository
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.SettingsStorage
 import com.aure.clustertune.model.AppColorSource
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.AppSettings
 import com.aure.clustertune.model.CpuPolicyInfo
+import com.aure.clustertune.model.InstalledAppInfo
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
@@ -26,11 +29,13 @@ class TunerViewModel(
     private val repository: PerformanceRepository,
     private val settingsStorage: SettingsStorage,
     private val privilegedExecutionResolver: PrivilegedExecutionResolver,
+    private val installedAppRepository: InstalledAppRepository,
 ) : ViewModel() {
 
     private val edits = MutableStateFlow<Map<Int, Int>>(emptyMap())
     private val transientMessage = MutableStateFlow<String?>(null)
     private val transientError = MutableStateFlow<String?>(null)
+    private val installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
 
     val state: StateFlow<TunerState> = combine(
         repository.observeState(),
@@ -56,6 +61,22 @@ class TunerViewModel(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = AppSettings(),
     )
+
+    val launchableApps: StateFlow<List<InstalledAppInfo>> = installedApps.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
+    init {
+        refreshInstalledApps()
+    }
+
+    fun refreshInstalledApps() {
+        viewModelScope.launch {
+            installedApps.value = installedAppRepository.listLaunchableApps()
+        }
+    }
 
     fun setPolicyValue(policy: CpuPolicyInfo, rawValue: Int) {
         val snapped = snapToSupported(policy, rawValue)
@@ -169,6 +190,28 @@ class TunerViewModel(
         viewModelScope.launch {
             repository.deleteProfile(profileId)
             transientMessage.value = "Deleted profile"
+            transientError.value = null
+        }
+    }
+
+    fun saveAppProfileAssignment(packageName: String, appLabel: String, profileId: String) {
+        viewModelScope.launch {
+            repository.saveAppProfileAssignment(
+                AppProfileAssignment(
+                    packageName = packageName,
+                    appLabel = appLabel,
+                    profileId = profileId,
+                ),
+            )
+            transientMessage.value = "Saved app profile for $appLabel"
+            transientError.value = null
+        }
+    }
+
+    fun deleteAppProfileAssignment(packageName: String) {
+        viewModelScope.launch {
+            repository.deleteAppProfileAssignment(packageName)
+            transientMessage.value = "Deleted app profile"
             transientError.value = null
         }
     }
@@ -350,11 +393,17 @@ class TunerViewModel(
             repository: PerformanceRepository,
             settingsStorage: SettingsStorage,
             privilegedExecutionResolver: PrivilegedExecutionResolver,
+            installedAppRepository: InstalledAppRepository,
         ): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TunerViewModel(repository, settingsStorage, privilegedExecutionResolver) as T
+                    return TunerViewModel(
+                        repository,
+                        settingsStorage,
+                        privilegedExecutionResolver,
+                        installedAppRepository,
+                    ) as T
                 }
             }
         }

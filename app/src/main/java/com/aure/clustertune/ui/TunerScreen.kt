@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -68,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.aure.clustertune.model.CpuPolicyInfo
+import com.aure.clustertune.model.AppProfileAssignment
+import com.aure.clustertune.model.InstalledAppInfo
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
@@ -75,6 +78,11 @@ import com.aure.clustertune.model.TunerState
 import kotlinx.coroutines.delay
 
 private const val NEW_PROFILE_DIALOG_ID = "__new_profile__"
+
+private enum class MainTab {
+    PROFILES,
+    APPS,
+}
 
 @Composable
 fun MainTunerScreen(
@@ -86,12 +94,19 @@ fun MainTunerScreen(
     onUpdateProfile: (String, String, TunerState) -> Unit,
     onDeleteProfile: (String) -> Unit,
     onMoveProfile: (String, Int) -> Unit,
+    launchableApps: List<InstalledAppInfo>,
+    onSaveAppProfileAssignment: (String, String, String) -> Unit,
+    onDeleteAppProfileAssignment: (String) -> Unit,
+    onRefreshInstalledApps: () -> Unit,
     onOpenSettings: () -> Unit,
     onRefreshLiveValues: () -> Unit,
     onStatusMessageShown: () -> Unit,
     onErrorMessageShown: () -> Unit,
 ) {
     var dialogProfileId by remember { mutableStateOf<String?>(null) }
+    var selectedTab by remember { mutableStateOf(MainTab.PROFILES) }
+    var appAssignmentToEdit by remember { mutableStateOf<AppProfileAssignment?>(null) }
+    var showAppAssignmentDialog by remember { mutableStateOf(false) }
 
     ScreenNotifications(
         state = state,
@@ -136,17 +151,52 @@ fun MainTunerScreen(
                     onEditManual = { dialogProfileId = ProfileStateResolver.MANUAL_PROFILE_ID },
                 )
 
-                ProfileListSection(
-                    state = state,
-                    sleepProfileId = sleepProfileId,
-                    onApplyProfile = onApplyProfile,
-                    onOpenCreateProfile = { dialogProfileId = NEW_PROFILE_DIALOG_ID },
-                    onEditProfile = { dialogProfileId = it },
-                    onMoveProfile = onMoveProfile,
-                    onApplySelectedProfile = { onApplyCurrent(state) },
+                MainTabSelector(
+                    selectedTab = selectedTab,
+                    onSelect = { selectedTab = it },
                 )
+
+                when (selectedTab) {
+                    MainTab.PROFILES -> ProfileListSection(
+                        state = state,
+                        sleepProfileId = sleepProfileId,
+                        onApplyProfile = onApplyProfile,
+                        onOpenCreateProfile = { dialogProfileId = NEW_PROFILE_DIALOG_ID },
+                        onEditProfile = { dialogProfileId = it },
+                        onMoveProfile = onMoveProfile,
+                        onApplySelectedProfile = { onApplyCurrent(state) },
+                    )
+
+                    MainTab.APPS -> AppProfilesSection(
+                        state = state,
+                        onAdd = {
+                            appAssignmentToEdit = null
+                            showAppAssignmentDialog = true
+                            onRefreshInstalledApps()
+                        },
+                        onEdit = { assignment ->
+                            appAssignmentToEdit = assignment
+                            showAppAssignmentDialog = true
+                            onRefreshInstalledApps()
+                        },
+                        onDelete = onDeleteAppProfileAssignment,
+                    )
+                }
             }
         }
+    }
+
+    if (showAppAssignmentDialog) {
+        AppProfileAssignmentDialog(
+            assignment = appAssignmentToEdit,
+            apps = launchableApps,
+            profiles = state.displayProfiles.filter { profile -> profile.source != ProfileSource.VIRTUAL },
+            onDismiss = { showAppAssignmentDialog = false },
+            onSave = { app, profile ->
+                onSaveAppProfileAssignment(app.packageName, app.label, profile.id)
+                showAppAssignmentDialog = false
+            },
+        )
     }
 
     dialogProfileId?.let { profileId ->
@@ -462,6 +512,279 @@ private fun CurrentFrequenciesCard(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MainTabSelector(
+    selectedTab: MainTab,
+    onSelect: (MainTab) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AssistChip(
+            onClick = { onSelect(MainTab.PROFILES) },
+            label = { Text("Profiles") },
+            leadingIcon = { Icon(Icons.Filled.Memory, contentDescription = null) },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = if (selectedTab == MainTab.PROFILES) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            ),
+        )
+        AssistChip(
+            onClick = { onSelect(MainTab.APPS) },
+            label = { Text("Apps") },
+            leadingIcon = { Icon(Icons.Rounded.Apps, contentDescription = null) },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = if (selectedTab == MainTab.APPS) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            ),
+        )
+    }
+}
+
+@Composable
+private fun AppProfilesSection(
+    state: TunerState,
+    onAdd: () -> Unit,
+    onEdit: (AppProfileAssignment) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    SectionCard(title = null) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Apps",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Apply profiles when assigned apps are focused.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onAdd) {
+                Icon(Icons.Rounded.Add, contentDescription = null)
+                Text("Add app")
+            }
+        }
+
+        if (state.appProfileAssignments.isEmpty()) {
+            Text(
+                text = "No app profiles yet. Add an app and choose which profile should activate when it is focused.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                state.appProfileAssignments.forEach { assignment ->
+                    val profileName = state.displayProfiles.firstOrNull { it.id == assignment.profileId }?.name
+                        ?: "Missing profile"
+                    AppProfileAssignmentRow(
+                        assignment = assignment,
+                        profileName = profileName,
+                        onEdit = { onEdit(assignment) },
+                        onDelete = { onDelete(assignment.packageName) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppProfileAssignmentRow(
+    assignment: AppProfileAssignment,
+    profileName: String,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Apps, contentDescription = null)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = assignment.appLabel,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${assignment.packageName} • $profileName",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Rounded.Edit, contentDescription = "Edit ${assignment.appLabel}")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Rounded.Delete, contentDescription = "Delete ${assignment.appLabel}")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppProfileAssignmentDialog(
+    assignment: AppProfileAssignment?,
+    apps: List<InstalledAppInfo>,
+    profiles: List<PerformanceProfile>,
+    onDismiss: () -> Unit,
+    onSave: (InstalledAppInfo, PerformanceProfile) -> Unit,
+) {
+    var selectedApp by remember(assignment, apps) {
+        mutableStateOf(
+            assignment?.let { current ->
+                apps.firstOrNull { it.packageName == current.packageName }
+                    ?: InstalledAppInfo(current.packageName, current.appLabel)
+            } ?: apps.firstOrNull(),
+        )
+    }
+    var selectedProfile by remember(assignment, profiles) {
+        mutableStateOf(
+            assignment?.let { current -> profiles.firstOrNull { it.id == current.profileId } }
+                ?: profiles.firstOrNull(),
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxWidth(0.92f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text(if (assignment == null) "Add app profile" else "Edit app profile") },
+        text = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                SelectionColumn(
+                    title = "App",
+                    items = apps,
+                    selected = selectedApp,
+                    itemLabel = { it.label },
+                    itemSubtitle = { it.packageName },
+                    onSelect = { selectedApp = it },
+                    modifier = Modifier.weight(1f),
+                )
+                SelectionColumn(
+                    title = "Profile",
+                    items = profiles,
+                    selected = selectedProfile,
+                    itemLabel = { it.name },
+                    itemSubtitle = { it.id },
+                    onSelect = { selectedProfile = it },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selectedApp != null && selectedProfile != null,
+                onClick = {
+                    val app = selectedApp ?: return@TextButton
+                    val profile = selectedProfile ?: return@TextButton
+                    onSave(app, profile)
+                },
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun <T> SelectionColumn(
+    title: String,
+    items: List<T>,
+    selected: T?,
+    itemLabel: (T) -> String,
+    itemSubtitle: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items.take(18).forEach { item ->
+                val isSelected = item == selected
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(item) },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHighest
+                    },
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = itemLabel(item),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = itemSubtitle(item),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (items.isEmpty()) {
+                Text(
+                    text = "No options available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

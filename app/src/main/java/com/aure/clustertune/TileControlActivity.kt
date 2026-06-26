@@ -39,6 +39,7 @@ class TileControlActivity : ComponentActivity() {
             repository = container.repository,
             settingsStorage = container.settingsStorage,
             privilegedExecutionResolver = container.privilegedExecutionResolver,
+            installedAppRepository = container.installedAppRepository,
         )
     }
 

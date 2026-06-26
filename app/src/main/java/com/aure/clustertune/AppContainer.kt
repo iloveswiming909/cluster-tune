@@ -3,6 +3,7 @@ package com.aure.clustertune
 import android.content.Context
 import com.aure.clustertune.data.BundledProfileProvider
 import com.aure.clustertune.data.CpuPolicyDetector
+import com.aure.clustertune.data.InstalledAppRepository
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.ProfileStorage
 import com.aure.clustertune.data.SettingsStorage
@@ -26,6 +27,10 @@ class AppContainer(context: Context) {
 
     val settingsStorage: SettingsStorage by lazy {
         SettingsStorage(appContext)
+    }
+
+    val installedAppRepository: InstalledAppRepository by lazy {
+        InstalledAppRepository(appContext)
     }
 
     init {

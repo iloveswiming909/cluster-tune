@@ -10,6 +10,7 @@ data class TunerState(
     val bundledProfiles: List<PerformanceProfile> = emptyList(),
     val userProfiles: List<PerformanceProfile> = emptyList(),
     val displayProfiles: List<PerformanceProfile> = emptyList(),
+    val appProfileAssignments: List<AppProfileAssignment> = emptyList(),
     val selectedProfileId: String? = null,
     val selectedDisplayProfileId: String? = null,
     val selectedDisplayProfileName: String? = null,
