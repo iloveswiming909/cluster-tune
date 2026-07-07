@@ -23,17 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Bedtime
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.PowerSettingsNew
-import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.SwapVert
-import androidx.compose.material.icons.rounded.Terminal
 
-import androidx.compose.material.icons.rounded.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,7 +33,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
+
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
@@ -64,7 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.vector.ImageVector
+
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -72,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
+import com.aure.clustertune.model.MAX_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.TileInteractionBehavior
 
@@ -139,6 +130,8 @@ fun SettingsScreen(
     onCheckForUpdates: () -> Unit,
     onAutomaticUpdateChecksEnabledChange: (Boolean) -> Unit,
     onUpdateCheckIntervalDaysChange: (Int) -> Unit,
+    onProfileSwitchToastsEnabledChange: (Boolean) -> Unit,
+    onProfileSwitchHistoryLimitChange: (Int) -> Unit,
     onPrivilegedExecutionMethodChange: (String?) -> Unit,
     onAutoDetectPrivilegedExecutionMethod: () -> Unit,
     isShizukuPermissionGranted: Boolean,
@@ -148,6 +141,10 @@ fun SettingsScreen(
 
     var updateIntervalText by remember(settings.updateCheckIntervalDays) {
         mutableStateOf(settings.updateCheckIntervalDays.toString())
+    }
+
+    var historyLimitText by remember(settings.profileSwitchHistoryLimit) {
+        mutableStateOf(settings.profileSwitchHistoryLimit.toString())
     }
 
     Column(
@@ -175,7 +172,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Appearance", icon = Icons.Rounded.Palette) {
+        SettingsSection(title = "Appearance", symbol = "palette") {
             ThemeModeSelector(
                 selected = settings.colorSource,
                 onChange = onColorSourceChange,
@@ -186,7 +183,7 @@ fun SettingsScreen(
             )
         }
 
-        SettingsSection(title = "Updates", icon = Icons.Rounded.Update) {
+        SettingsSection(title = "Updates", symbol = "update") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -219,7 +216,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Quick Settings Tile", icon = Icons.Rounded.GridView) {
+        SettingsSection(title = "Quick Settings Tile", symbol = "grid_view") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -251,6 +248,67 @@ fun SettingsScreen(
             }
         }
 
+        SettingsSection(title = "App profiles", symbol = "notifications") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Show profile switch toast",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Show a short toast with only the profile name when app automation switches profiles.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Switch(
+                    checked = settings.profileSwitchToastsEnabled,
+                    onCheckedChange = onProfileSwitchToastsEnabledChange,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "History limit",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Keep only the newest profile-switch entries. Older entries are removed when a new one is added.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                OutlinedTextField(
+                    value = historyLimitText,
+                    onValueChange = { rawValue ->
+                        val digits = rawValue.filter(Char::isDigit).take(4)
+                        historyLimitText = digits
+                        digits.toIntOrNull()?.let { value ->
+                            onProfileSwitchHistoryLimitChange(value.coerceAtMost(MAX_PROFILE_SWITCH_HISTORY_LIMIT))
+                        }
+                    },
+                    label = { Text("Entries") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(132.dp),
+                )
+            }
+        }
+
         DeviceExecutionMethodCard(
             selectedMethodId = settings.privilegedExecutionMethodId,
             isShizukuPermissionGranted = isShizukuPermissionGranted,
@@ -259,7 +317,7 @@ fun SettingsScreen(
             onRequestShizukuPermission = onRequestShizukuPermission,
         )
 
-        SettingsSection(title = "Startup", icon = Icons.Rounded.PowerSettingsNew) {
+        SettingsSection(title = "Startup", symbol = "power_settings_new") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -286,7 +344,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Sleep", icon = Icons.Rounded.Bedtime) {
+        SettingsSection(title = "Sleep", symbol = "bedtime") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -329,7 +387,7 @@ fun SettingsScreen(
             }
         }
 
-        SettingsSection(title = "Profiles", icon = Icons.Rounded.SwapVert) {
+        SettingsSection(title = "Profiles", symbol = "swap_vert") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -447,11 +505,12 @@ private fun DeviceExecutionMethodCard(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Terminal,
+                    MaterialSymbol(
+                        name = "terminal",
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(10.dp),
+                        size = 24.dp,
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -477,10 +536,10 @@ private fun DeviceExecutionMethodCard(
                     onClick = onAutoDetect,
                     contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
+                    MaterialSymbol(
+                        name = "auto_awesome",
                         contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize),
+                        size = ButtonDefaults.IconSize,
                     )
                     Text(
                         text = "Auto detect",
@@ -497,10 +556,10 @@ private fun DeviceExecutionMethodCard(
                     enabled = needsPermission,
                     contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Security,
+                    MaterialSymbol(
+                        name = "security",
                         contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize),
+                        size = ButtonDefaults.IconSize,
                     )
                     Text(
                         text = permissionButtonLabel(selectedMethodId, isShizukuPermissionGranted),
@@ -531,11 +590,12 @@ private fun ExecutionMethodSelectionDialog(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Terminal,
+                    MaterialSymbol(
+                        name = "terminal",
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(10.dp),
+                        size = 24.dp,
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1100,7 +1160,7 @@ private fun SettingsControlGroup(
 @Composable
 private fun SettingsSection(
     title: String,
-    icon: ImageVector,
+    symbol: String,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
@@ -1116,7 +1176,7 @@ private fun SettingsSection(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            SettingsSectionTitle(title = title, icon = icon)
+            SettingsSectionTitle(title = title, symbol = symbol)
             content()
         }
     }
@@ -1125,7 +1185,7 @@ private fun SettingsSection(
 @Composable
 private fun SettingsSectionTitle(
     title: String,
-    icon: ImageVector,
+    symbol: String,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1135,11 +1195,12 @@ private fun SettingsSectionTitle(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.primaryContainer,
         ) {
-            Icon(
-                imageVector = icon,
+            MaterialSymbol(
+                name = symbol,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.padding(10.dp),
+                size = 24.dp,
             )
         }
         Text(

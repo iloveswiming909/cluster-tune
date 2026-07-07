@@ -33,6 +33,7 @@ import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import com.aure.clustertune.root.ShizukuCommandRunner
 import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.SettingsScreen
+import com.aure.clustertune.ui.SingleToast
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
 import com.aure.clustertune.update.AppRelease
@@ -75,6 +76,7 @@ class MainActivity : ComponentActivity() {
             if (settings.sleepProfileEnabled) {
                 SleepProfileMonitorService.start(this@MainActivity)
             }
+            maybeStartAppProfileMonitor()
         }
     }
 
@@ -84,6 +86,7 @@ class MainActivity : ComponentActivity() {
         maybeRequestQuickSettingsTileOnFirstRun()
         maybeAutoDetectPrivilegedExecutionOnFirstRun()
         maybeCheckForUpdatesOnLaunch()
+        maybeStartSleepProfileMonitor()
         maybeStartAppProfileMonitor()
 
         setContent {
@@ -92,6 +95,7 @@ class MainActivity : ComponentActivity() {
                 Surface {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
                     val launchableApps = viewModel.launchableApps.collectAsStateWithLifecycle().value
+                    val recentActiveApps = viewModel.recentActiveApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
 
                     if (showSettings) {
@@ -135,6 +139,8 @@ class MainActivity : ComponentActivity() {
                             onCheckForUpdates = { checkForUpdates(showUpToDateToast = true) },
                             onAutomaticUpdateChecksEnabledChange = viewModel::setAutomaticUpdateChecksEnabled,
                             onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
+                            onProfileSwitchToastsEnabledChange = viewModel::setProfileSwitchToastsEnabled,
+                            onProfileSwitchHistoryLimitChange = viewModel::setProfileSwitchHistoryLimit,
                             onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
                             onAutoDetectPrivilegedExecutionMethod = viewModel::autoDetectPrivilegedExecutionMethod,
                             isShizukuPermissionGranted = shizukuCommandRunner.hasPermission(),
@@ -155,6 +161,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteProfile = viewModel::deleteProfile,
                             onMoveProfile = viewModel::moveProfile,
                             launchableApps = launchableApps,
+                            recentActiveApps = recentActiveApps,
                             onSaveAppProfileAssignment = { packageName, appLabel, profileId ->
                                 viewModel.saveAppProfileAssignment(packageName, appLabel, profileId)
                                 startAppProfileMonitor()
@@ -182,6 +189,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        maybeStartSleepProfileMonitor()
+        maybeStartAppProfileMonitor()
+    }
+
     private fun startSleepProfileMonitor() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -195,11 +208,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startAppProfileMonitor() {
         if (!AppProfileMonitorService.hasUsageStatsPermission(this)) {
-            Toast.makeText(
-                this,
-                "Grant Usage Access to enable per-app profiles",
-                Toast.LENGTH_LONG,
-            ).show()
+            SingleToast.show(this, "Grant Usage Access to enable per-app profiles", Toast.LENGTH_LONG)
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             return
         }
@@ -235,6 +244,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun maybeStartSleepProfileMonitor() {
+        lifecycleScope.launch {
+            val settings = container.settingsStorage.settings.first()
+            if (settings.sleepProfileEnabled) {
+                startSleepProfileMonitor()
+            }
+        }
+    }
+
     private fun maybeStartAppProfileMonitor() {
         lifecycleScope.launch {
             if (container.repository.observeState().first().appProfileAssignments.isNotEmpty() &&
@@ -253,35 +271,31 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (!showResultToast) return@request
-            Toast.makeText(
-                applicationContext,
-                result.toToastMessage(),
-                Toast.LENGTH_SHORT,
-            ).show()
+            SingleToast.show(applicationContext, result.toToastMessage(), Toast.LENGTH_SHORT)
         }
     }
 
     private fun requestShizukuPermission() {
         when {
             !shizukuCommandRunner.isBinderAlive() -> {
-                Toast.makeText(applicationContext, "Shizuku is not running", Toast.LENGTH_LONG).show()
+                SingleToast.show(applicationContext, "Shizuku is not running", Toast.LENGTH_LONG)
             }
 
             shizukuCommandRunner.hasPermission() -> {
-                Toast.makeText(applicationContext, "Shizuku permission is already granted", Toast.LENGTH_SHORT).show()
+                SingleToast.show(applicationContext, "Shizuku permission is already granted", Toast.LENGTH_SHORT)
             }
 
             else -> {
                 shizukuCommandRunner.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
                     .onSuccess {
-                        Toast.makeText(applicationContext, "Shizuku permission requested", Toast.LENGTH_SHORT).show()
+                        SingleToast.show(applicationContext, "Shizuku permission requested", Toast.LENGTH_SHORT)
                     }
                     .onFailure { throwable ->
-                        Toast.makeText(
+                        SingleToast.show(
                             applicationContext,
                             throwable.message ?: "Failed to request Shizuku permission",
                             Toast.LENGTH_LONG,
-                        ).show()
+                        )
                     }
             }
         }
@@ -308,7 +322,7 @@ class MainActivity : ComponentActivity() {
     private fun checkForUpdates(showUpToDateToast: Boolean) {
         lifecycleScope.launch {
             if (showUpToDateToast) {
-                Toast.makeText(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT).show()
+                SingleToast.show(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT)
             }
             container.settingsStorage.persistLastUpdateCheckMillis(System.currentTimeMillis())
             appUpdateManager.checkForUpdates()
@@ -316,11 +330,11 @@ class MainActivity : ComponentActivity() {
                     when (result) {
                         is UpdateCheckResult.UpToDate -> {
                             if (showUpToDateToast) {
-                                Toast.makeText(
+                                SingleToast.show(
                                     applicationContext,
                                     "ClusterTune is up to date (${result.currentVersionName})",
                                     Toast.LENGTH_LONG,
-                                ).show()
+                                )
                             }
                         }
 
@@ -330,44 +344,40 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 .onFailure { throwable ->
-                    Toast.makeText(
+                    SingleToast.show(
                         applicationContext,
                         throwable.message ?: "Failed to check for updates",
                         Toast.LENGTH_LONG,
-                    ).show()
+                    )
                 }
         }
     }
 
     private fun downloadAndInstallUpdate(release: AppRelease) {
         lifecycleScope.launch {
-            Toast.makeText(
-                applicationContext,
-                "Downloading ${release.tagName}…",
-                Toast.LENGTH_SHORT,
-            ).show()
+            SingleToast.show(applicationContext, "Downloading ${release.tagName}…", Toast.LENGTH_SHORT)
             appUpdateManager.downloadApk(release)
                 .onSuccess { apkFile ->
                     when (appUpdateManager.installApk(apkFile)) {
-                        InstallLaunchResult.Started -> Toast.makeText(
+                        InstallLaunchResult.Started -> SingleToast.show(
                             applicationContext,
                             "Opening installer for ${release.tagName}",
                             Toast.LENGTH_LONG,
-                        ).show()
+                        )
 
-                        InstallLaunchResult.PermissionRequired -> Toast.makeText(
+                        InstallLaunchResult.PermissionRequired -> SingleToast.show(
                             applicationContext,
                             "Allow ClusterTune to install unknown apps, then check again.",
                             Toast.LENGTH_LONG,
-                        ).show()
+                        )
                     }
                 }
                 .onFailure { throwable ->
-                    Toast.makeText(
+                    SingleToast.show(
                         applicationContext,
                         throwable.message ?: "Failed to download update",
                         Toast.LENGTH_LONG,
-                    ).show()
+                    )
                 }
         }
     }
@@ -380,13 +390,13 @@ class MainActivity : ComponentActivity() {
                     outputStream.write(json.toByteArray())
                 } ?: error("Unable to open export file")
             }.onSuccess {
-                Toast.makeText(applicationContext, "Exported profiles", Toast.LENGTH_SHORT).show()
+                SingleToast.show(applicationContext, "Exported profiles", Toast.LENGTH_SHORT)
             }.onFailure { throwable ->
-                Toast.makeText(
+                SingleToast.show(
                     applicationContext,
                     throwable.message ?: "Failed to export profiles",
                     Toast.LENGTH_LONG,
-                ).show()
+                )
             }
         }
     }
@@ -398,17 +408,13 @@ class MainActivity : ComponentActivity() {
                     ?: error("Unable to open import file")
                 viewModel.importProfilesJson(json)
             }.onSuccess { importedCount ->
-                Toast.makeText(
-                    applicationContext,
-                    "Imported $importedCount profiles",
-                    Toast.LENGTH_SHORT,
-                ).show()
+                SingleToast.show(applicationContext, "Imported $importedCount profiles", Toast.LENGTH_SHORT)
             }.onFailure { throwable ->
-                Toast.makeText(
+                SingleToast.show(
                     applicationContext,
                     throwable.message ?: "Failed to import profiles",
                     Toast.LENGTH_LONG,
-                ).show()
+                )
             }
         }
     }

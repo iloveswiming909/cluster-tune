@@ -3,8 +3,6 @@ package com.aure.clustertune.tile
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
@@ -17,6 +15,7 @@ import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.TileInteractionBehavior
 import com.aure.clustertune.model.TunerState
+import com.aure.clustertune.ui.SingleToast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -173,7 +172,7 @@ class PerformanceTileService : TileService() {
                         container.repository.cycleTileProfile()
                             .onSuccess { profile ->
                                 updateTileForAppliedProfile(container, profile)
-                                showToast("Applied ${profile.name}")
+                                showToast(profile.name)
                             }
                             .onFailure { throwable ->
                                 showToast(throwable.message ?: "Failed to cycle profile")
@@ -204,9 +203,7 @@ class PerformanceTileService : TileService() {
     }
 
     private fun showToast(message: String) {
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-        }
+        SingleToast.show(applicationContext, message, Toast.LENGTH_SHORT)
     }
 
     @Suppress("DEPRECATION")

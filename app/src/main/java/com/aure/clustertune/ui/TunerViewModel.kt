@@ -36,6 +36,7 @@ class TunerViewModel(
     private val transientMessage = MutableStateFlow<String?>(null)
     private val transientError = MutableStateFlow<String?>(null)
     private val installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
+    private val recentApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
 
     val state: StateFlow<TunerState> = combine(
         repository.observeState(),
@@ -68,6 +69,12 @@ class TunerViewModel(
         initialValue = emptyList(),
     )
 
+    val recentActiveApps: StateFlow<List<InstalledAppInfo>> = recentApps.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
     init {
         refreshInstalledApps()
     }
@@ -75,6 +82,7 @@ class TunerViewModel(
     fun refreshInstalledApps() {
         viewModelScope.launch {
             installedApps.value = installedAppRepository.listLaunchableApps()
+            recentApps.value = installedAppRepository.listRecentActiveApps()
         }
     }
 
@@ -147,7 +155,12 @@ class TunerViewModel(
             }
             if (applyResult.isSuccess) {
                 repository.selectProfile(appliedProfile?.id?.takeUnless { it == ProfileStateResolver.STOCK_PROFILE_ID })
-                onApplied(appliedProfile?.name ?: "Manual")
+                repository.logProfileSwitch(
+                    profileId = appliedProfile?.id ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+                    profileName = appliedProfile?.name ?: "Manual",
+                    trigger = "Manual apply from Profiles tab",
+                )
+                onApplied(appliedProfile?.name ?: "Custom values")
             }
         }
     }
@@ -308,6 +321,19 @@ class TunerViewModel(
         }
     }
 
+    fun setProfileSwitchToastsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistProfileSwitchToastsEnabled(enabled)
+        }
+    }
+
+    fun setProfileSwitchHistoryLimit(limit: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistProfileSwitchHistoryLimit(limit)
+            repository.trimProfileSwitchHistory(limit)
+        }
+    }
+
     fun setPrivilegedExecutionMethod(methodId: String?) {
         viewModelScope.launch {
             privilegedExecutionResolver.setConfiguredMethodId(methodId)
@@ -355,12 +381,7 @@ class TunerViewModel(
         appliedProfile: PerformanceProfile?,
         commandOutput: String?,
     ): String {
-        val base = if (appliedProfile != null) {
-            "Applied profile: ${appliedProfile.name}"
-        } else {
-            "Applied profile: Manual"
-        }
-        return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base
+        return appliedProfile?.name ?: "Custom values"
     }
 
     private fun buildVerificationFailureMessage(

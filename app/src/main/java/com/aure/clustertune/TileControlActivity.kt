@@ -15,6 +15,7 @@ import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.TunerState
 import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import com.aure.clustertune.ui.CompactTunerScreen
+import com.aure.clustertune.ui.SingleToast
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
 import kotlinx.coroutines.launch
@@ -94,19 +95,24 @@ class TileControlActivity : ComponentActivity() {
                 container.repository.selectProfile(
                     appliedProfile?.id?.takeUnless { id -> id == ProfileStateResolver.STOCK_PROFILE_ID },
                 )
-                Toast.makeText(
+                container.repository.logProfileSwitch(
+                    profileId = appliedProfile?.id ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+                    profileName = appliedProfile?.name ?: "Manual",
+                    trigger = "Quick Settings dialog",
+                )
+                SingleToast.show(
                     applicationContext,
-                    "Applied ${appliedProfile?.name ?: "Manual"}",
+                    appliedProfile?.name ?: "Custom values",
                     Toast.LENGTH_SHORT,
-                ).show()
+                )
                 dismissTileDialog()
                 QuickSettingsTileRefresher.requestUpdate(applicationContext)
             }.onFailure { throwable ->
-                Toast.makeText(
+                SingleToast.show(
                     applicationContext,
                     throwable.message ?: "Failed to apply limits",
                     Toast.LENGTH_LONG,
-                ).show()
+                )
             }
         }
     }
