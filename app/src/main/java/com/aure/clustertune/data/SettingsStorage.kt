@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
+import com.aure.clustertune.model.DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MAX_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MIN_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.TileInteractionBehavior
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -38,6 +41,8 @@ class SettingsStorage(private val context: Context) {
     private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
     private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
     private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
+    private val profileSwitchToastsEnabledKey = booleanPreferencesKey("profile_switch_toasts_enabled")
+    private val profileSwitchHistoryLimitKey = intPreferencesKey("profile_switch_history_limit")
     private val privilegedExecutionMethodIdKey = stringPreferencesKey("privileged_execution_method_id")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
@@ -60,6 +65,10 @@ class SettingsStorage(private val context: Context) {
             automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
             updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
             lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
+            profileSwitchToastsEnabled = preferences[profileSwitchToastsEnabledKey] ?: true,
+            profileSwitchHistoryLimit = (preferences[profileSwitchHistoryLimitKey]
+                ?: DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT)
+                .coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT),
             privilegedExecutionMethodId = preferences[privilegedExecutionMethodIdKey],
         )
     }
@@ -149,6 +158,19 @@ class SettingsStorage(private val context: Context) {
     suspend fun persistLastUpdateCheckMillis(timestampMillis: Long) {
         context.settingsDataStore.edit { preferences ->
             preferences[lastUpdateCheckMillisKey] = timestampMillis
+        }
+    }
+
+    suspend fun persistProfileSwitchToastsEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[profileSwitchToastsEnabledKey] = enabled
+        }
+    }
+
+    suspend fun persistProfileSwitchHistoryLimit(limit: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[profileSwitchHistoryLimitKey] =
+                limit.coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT)
         }
     }
 

@@ -2,7 +2,11 @@ package com.aure.clustertune.data
 
 import com.aure.clustertune.model.CpuPolicyInfo
 import com.aure.clustertune.model.AppProfileAssignment
+import com.aure.clustertune.model.DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MAX_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MIN_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.PerformanceProfile
+import com.aure.clustertune.model.ProfileSwitchHistoryEntry
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
 import com.aure.clustertune.model.TunerState
@@ -25,6 +29,7 @@ private data class StorageState(
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
     val appProfileAssignments: List<AppProfileAssignment>,
+    val profileSwitchHistory: List<ProfileSwitchHistoryEntry>,
     val selectedProfileId: String?,
     val lastAppliedDisplayProfileId: String?,
 )
@@ -35,6 +40,7 @@ private data class PartialStorageState(
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
     val appProfileAssignments: List<AppProfileAssignment>,
+    val profileSwitchHistory: List<ProfileSwitchHistoryEntry>,
 )
 
 internal data class ImportedProfileMerge(
@@ -46,6 +52,7 @@ class PerformanceRepository(
     private val detector: CpuPolicyDetector,
     private val bundledProfileProvider: BundledProfileProvider,
     private val profileStorage: ProfileStorage,
+    private val settingsStorage: SettingsStorage,
     private val commandBuilder: PerformanceCommandBuilder,
     private val rootCommandRunner: RootCommandRunner,
 ) {
@@ -64,7 +71,7 @@ class PerformanceRepository(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeState(): Flow<TunerState> {
-        val storageState = combine(
+        val storageBaseState = combine(
             profileStorage.profiles,
             profileStorage.deletedBundledProfileIds,
             profileStorage.displayOrder,
@@ -77,7 +84,14 @@ class PerformanceRepository(
                 displayOrder = displayOrder,
                 lastValues = lastValues,
                 appProfileAssignments = appProfileAssignments,
+                profileSwitchHistory = emptyList(),
             )
+        }
+        val storageState = combine(
+            storageBaseState,
+            profileStorage.profileSwitchHistory,
+        ) { storage, profileSwitchHistory ->
+            storage.copy(profileSwitchHistory = profileSwitchHistory)
         }
         val completeStorageState = combine(
             storageState,
@@ -90,6 +104,7 @@ class PerformanceRepository(
                 displayOrder = partial.displayOrder,
                 lastValues = partial.lastValues,
                 appProfileAssignments = partial.appProfileAssignments,
+                profileSwitchHistory = partial.profileSwitchHistory,
                 selectedProfileId = selectedProfileId,
                 lastAppliedDisplayProfileId = lastAppliedDisplayProfileId,
             )
@@ -167,6 +182,7 @@ class PerformanceRepository(
                             appProfileAssignments = storage.appProfileAssignments.filter { assignment ->
                                 orderedRealProfiles.any { profile -> profile.id == assignment.profileId }
                             },
+                            profileSwitchHistory = storage.profileSwitchHistory,
                         ),
                     ),
                 )
@@ -236,13 +252,21 @@ class PerformanceRepository(
             values = currentValues,
             profileId = state.activeDisplayProfileId ?: state.lastAppliedDisplayProfileId,
         )
-        return applyValuesInternal(
+        val result = applyValuesInternal(
             policies = state.policies,
             selectedValues = sleepProfile.maxFrequencies,
             isReset = sleepProfile.id == ProfileStateResolver.STOCK_PROFILE_ID,
             appliedDisplayProfileId = sleepProfile.id,
             persistNormalState = false,
         )
+        if (result.isSuccess) {
+            logProfileSwitch(
+                profileId = sleepProfile.id,
+                profileName = sleepProfile.name,
+                trigger = "Device sleep",
+            )
+        }
+        return result
     }
 
     suspend fun restorePreSleepState(): Result<ApplyOutcome> {
@@ -264,7 +288,15 @@ class PerformanceRepository(
         if (filteredValues.isEmpty()) {
             return Result.failure(IllegalStateException("No stored values match detected policies"))
         }
-        return applyValuesInternal(
+        val restoreProfileName = when (restoreProfileId) {
+            ProfileStateResolver.STOCK_PROFILE_ID -> "Stock"
+            null,
+            ProfileStateResolver.MANUAL_PROFILE_ID -> "Manual"
+            else -> observeState().first().displayProfiles.firstOrNull { profile ->
+                profile.id == restoreProfileId
+            }?.name ?: "Previous profile"
+        }
+        val result = applyValuesInternal(
             policies = policies,
             selectedValues = filteredValues,
             isReset = restoreProfileId == ProfileStateResolver.STOCK_PROFILE_ID,
@@ -278,6 +310,14 @@ class PerformanceRepository(
             )
             profileStorage.clearSleepRestoreState()
         }
+        if (result.isSuccess) {
+            logProfileSwitch(
+                profileId = restoreProfileId ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+                profileName = restoreProfileName,
+                trigger = "Device wake",
+            )
+        }
+        return result
     }
 
     suspend fun applyPersistedLastValuesOnBoot(): Result<ApplyOutcome> {
@@ -340,6 +380,11 @@ class PerformanceRepository(
             appliedDisplayProfileId = nextProfile.id,
         ).map {
             selectProfile(nextProfile.id.takeUnless { id -> id == ProfileStateResolver.STOCK_PROFILE_ID })
+            logProfileSwitch(
+                profileId = nextProfile.id,
+                profileName = nextProfile.name,
+                trigger = "Quick Settings tile",
+            )
             nextProfile
         }
     }
@@ -477,6 +522,30 @@ class PerformanceRepository(
             appliedDisplayProfileId = restoreProfileId,
             persistNormalState = false,
         )
+    }
+
+    suspend fun logProfileSwitch(profileId: String?, profileName: String, trigger: String) {
+        val limit = settingsStorage.settings.first().profileSwitchHistoryLimit
+            .coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT)
+        profileStorage.appendProfileSwitchHistory(
+            ProfileSwitchHistoryEntry(
+                timestampMillis = System.currentTimeMillis(),
+                profileId = profileId,
+                profileName = profileName,
+                trigger = trigger,
+            ),
+            limit = limit,
+        )
+    }
+
+    suspend fun trimProfileSwitchHistory(limit: Int = DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT) {
+        profileStorage.trimProfileSwitchHistory(
+            limit.coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT),
+        )
+    }
+
+    suspend fun clearProfileSwitchHistory() {
+        profileStorage.clearProfileSwitchHistory()
     }
 
     suspend fun moveProfile(profileId: String, offset: Int) {

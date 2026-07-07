@@ -52,6 +52,7 @@ class AppContainer(context: Context) {
             ),
             bundledProfileProvider = BundledProfileProvider(appContext),
             profileStorage = ProfileStorage(appContext),
+            settingsStorage = settingsStorage,
             commandBuilder = PerformanceCommandBuilder(),
             rootCommandRunner = RootCommandRunner(
                 context = appContext,

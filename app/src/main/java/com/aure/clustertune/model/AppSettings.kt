@@ -24,5 +24,11 @@ data class AppSettings(
     val automaticUpdateChecksEnabled: Boolean = true,
     val updateCheckIntervalDays: Int = 7,
     val lastUpdateCheckMillis: Long = 0L,
+    val profileSwitchToastsEnabled: Boolean = true,
+    val profileSwitchHistoryLimit: Int = DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT,
     val privilegedExecutionMethodId: String? = null,
 )
+
+const val DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT = 100
+const val MIN_PROFILE_SWITCH_HISTORY_LIMIT = 1
+const val MAX_PROFILE_SWITCH_HISTORY_LIMIT = 1_000

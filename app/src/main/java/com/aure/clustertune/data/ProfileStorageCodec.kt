@@ -2,6 +2,7 @@ package com.aure.clustertune.data
 
 import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.PerformanceProfile
+import com.aure.clustertune.model.ProfileSwitchHistoryEntry
 import com.aure.clustertune.model.ProfileSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -106,6 +107,38 @@ object ProfileStorageCodec {
         }.getOrDefault(emptyList())
     }
 
+    fun encodeProfileSwitchHistory(entries: List<ProfileSwitchHistoryEntry>): String {
+        return json.encodeToString<List<StoredProfileSwitchHistoryEntry>>(
+            entries.map { entry ->
+                StoredProfileSwitchHistoryEntry(
+                    timestampMillis = entry.timestampMillis,
+                    profileId = entry.profileId,
+                    profileName = entry.profileName,
+                    trigger = entry.trigger,
+                )
+            },
+        )
+    }
+
+    fun parseProfileSwitchHistory(raw: String?): List<ProfileSwitchHistoryEntry> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<StoredProfileSwitchHistoryEntry>>(raw)
+                .mapNotNull { entry ->
+                    val profileName = entry.profileName.trim()
+                    val trigger = entry.trigger.trim()
+                    if (profileName.isBlank() || trigger.isBlank()) return@mapNotNull null
+                    ProfileSwitchHistoryEntry(
+                        timestampMillis = entry.timestampMillis,
+                        profileId = entry.profileId,
+                        profileName = profileName,
+                        trigger = trigger,
+                    )
+                }
+                .sortedByDescending { it.timestampMillis }
+        }.getOrDefault(emptyList())
+    }
+
     private fun parseSource(raw: String): ProfileSource {
         return runCatching { ProfileSource.valueOf(raw) }.getOrDefault(ProfileSource.USER)
     }
@@ -127,5 +160,13 @@ object ProfileStorageCodec {
         val packageName: String,
         val appLabel: String,
         val profileId: String,
+    )
+
+    @Serializable
+    private data class StoredProfileSwitchHistoryEntry(
+        val timestampMillis: Long,
+        val profileId: String? = null,
+        val profileName: String,
+        val trigger: String,
     )
 }
