@@ -15,6 +15,7 @@ import android.os.Process
 import androidx.core.app.NotificationCompat
 import com.aure.clustertune.AppContainer
 import com.aure.clustertune.R
+import com.aure.clustertune.ui.SingleToast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,8 @@ class AppProfileMonitorService : Service() {
     private var monitorJob: Job? = null
     private lateinit var container: AppContainer
     private var activeAssignedPackage: String? = null
+    private var lastObservedForegroundPackage: String? = null
+    private var lastUsageEventTimestamp: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -51,11 +54,19 @@ class AppProfileMonitorService : Service() {
 
     private suspend fun monitorForegroundApps() {
         while (currentCoroutineContext().isActive) {
-            val assignments = container.repository.observeState().first().appProfileAssignments
+            val state = container.repository.observeState().first()
+            val assignments = state.appProfileAssignments
             if (assignments.isEmpty()) {
                 if (activeAssignedPackage != null) {
+                    val restoreProfileName = state.lastAppliedDisplayProfileId
+                        ?.let { profileId -> state.displayProfiles.firstOrNull { it.id == profileId }?.name }
+                        ?: "Manual"
                     activeAssignedPackage = null
-                    container.repository.restoreNormalProfileTemporarily()
+                    container.repository.restoreNormalProfileTemporarily().onSuccess {
+                        val trigger = "No assigned app focused; restored previous profile"
+                        container.repository.logProfileSwitch(state.lastAppliedDisplayProfileId, restoreProfileName, trigger)
+                        showProfileToast(restoreProfileName)
+                    }
                 }
                 delay(POLL_INTERVAL_MS)
                 continue
@@ -68,35 +79,66 @@ class AppProfileMonitorService : Service() {
             val assignment = assignments.firstOrNull { it.packageName == foregroundPackage }
             when {
                 assignment != null && assignment.packageName != activeAssignedPackage -> {
+                    val profile = state.displayProfiles.firstOrNull { it.id == assignment.profileId }
+                    val profileName = profile?.name ?: assignment.profileId
                     activeAssignedPackage = assignment.packageName
-                    container.repository.applyProfileTemporarily(assignment.profileId)
+                    container.repository.applyProfileTemporarily(assignment.profileId).onSuccess {
+                        val trigger = "App focused: ${assignment.appLabel} (${assignment.packageName})"
+                        container.repository.logProfileSwitch(assignment.profileId, profileName, trigger)
+                        showProfileToast(profileName)
+                    }
                 }
                 assignment == null && activeAssignedPackage != null -> {
+                    val restoreProfileName = state.lastAppliedDisplayProfileId
+                        ?.let { profileId -> state.displayProfiles.firstOrNull { it.id == profileId }?.name }
+                        ?: "Manual"
                     activeAssignedPackage = null
-                    container.repository.restoreNormalProfileTemporarily()
+                    container.repository.restoreNormalProfileTemporarily().onSuccess {
+                        val trigger = foregroundPackage
+                            ?.let { "Focused app has no assigned profile: $it" }
+                            ?: "No foreground app detected"
+                        container.repository.logProfileSwitch(state.lastAppliedDisplayProfileId, restoreProfileName, trigger)
+                        showProfileToast(restoreProfileName)
+                    }
                 }
             }
             delay(POLL_INTERVAL_MS)
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun currentForegroundPackage(): String? {
         val usageStatsManager = getSystemService(UsageStatsManager::class.java)
         val now = System.currentTimeMillis()
-        val events = usageStatsManager.queryEvents(now - LOOKBACK_MS, now)
+        val queryStart = maxOf(now - LOOKBACK_MS, lastUsageEventTimestamp + 1)
+        val events = usageStatsManager.queryEvents(queryStart, now)
         val event = UsageEvents.Event()
-        var foregroundPackage: String? = null
-        var lastTimestamp = 0L
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            val isForeground = event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
-            if (isForeground && event.timeStamp >= lastTimestamp) {
-                foregroundPackage = event.packageName
-                lastTimestamp = event.timeStamp
+            if (event.timeStamp <= lastUsageEventTimestamp) continue
+            lastUsageEventTimestamp = event.timeStamp
+            when (event.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED,
+                UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                    lastObservedForegroundPackage = event.packageName
+                }
+                UsageEvents.Event.ACTIVITY_PAUSED,
+                UsageEvents.Event.ACTIVITY_STOPPED,
+                UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                    if (lastObservedForegroundPackage == event.packageName) {
+                        lastObservedForegroundPackage = null
+                    }
+                }
             }
         }
-        return foregroundPackage
+        return lastObservedForegroundPackage
+    }
+
+    private fun showProfileToast(profileName: String) {
+        scope.launch {
+            if (!container.settingsStorage.settings.first().profileSwitchToastsEnabled) return@launch
+            SingleToast.show(applicationContext, profileName)
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -121,8 +163,8 @@ class AppProfileMonitorService : Service() {
     companion object {
         private const val CHANNEL_ID = "app_profile_monitor"
         private const val NOTIFICATION_ID = 2002
-        private const val POLL_INTERVAL_MS = 2_000L
-        private const val LOOKBACK_MS = 10_000L
+        private const val POLL_INTERVAL_MS = 750L
+        private const val LOOKBACK_MS = 30_000L
 
         fun start(context: Context) {
             if (!hasUsageStatsPermission(context)) return
