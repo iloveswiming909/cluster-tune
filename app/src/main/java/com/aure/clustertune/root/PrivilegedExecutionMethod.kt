@@ -382,8 +382,22 @@ class ShizukuExecutionMethod(
 
 class RootShellCommandRunner {
     fun run(command: String, timeoutSeconds: Long): ShellCommandResult {
+        return runCatchingSu(timeoutSeconds, listOf("su", "-c", command))
+            .let { result ->
+                if (result.shouldRetryWithUserdebugSuSyntax()) {
+                    runCatchingSu(timeoutSeconds, listOf("su", "0", "sh", "-c", command))
+                } else {
+                    result
+                }
+            }
+    }
+
+    private fun runCatchingSu(
+        timeoutSeconds: Long,
+        invocation: List<String>,
+    ): ShellCommandResult {
         return runCatching {
-            val process = ProcessBuilder("su", "-c", command).start()
+            val process = ProcessBuilder(invocation).start()
             process.collectOutput(timeoutSeconds)
         }.getOrElse { throwable ->
             ShellCommandResult(
@@ -393,6 +407,11 @@ class RootShellCommandRunner {
                 failureMessage = throwable.message ?: throwable::class.java.simpleName,
             )
         }
+    }
+
+    private fun ShellCommandResult.shouldRetryWithUserdebugSuSyntax(): Boolean {
+        val combinedOutput = listOf(stderr, stdout, failureMessage.orEmpty()).joinToString("\n")
+        return exitCode != 0 && combinedOutput.contains("invalid uid/gid '-c'")
     }
 }
 
