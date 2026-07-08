@@ -1,6 +1,10 @@
 package com.aure.clustertune.ui
 
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -108,6 +112,8 @@ import com.aure.clustertune.model.ProfileSwitchHistoryEntry
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
 import com.aure.clustertune.model.TunerState
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -116,6 +122,9 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 private const val NEW_PROFILE_DIALOG_ID = "__new_profile__"
+private const val KOFI_URL = "https://ko-fi.com/J3J518XVKR"
+private const val SUPPORT_MESSAGE =
+    "ClusterTune is built and maintained independently. If it helps you tune your device, consider supporting my work on Ko-fi."
 
 private enum class MainTab {
     PROFILES,
@@ -126,6 +135,7 @@ private enum class MainTab {
 @Composable
 fun MainTunerScreen(
     state: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     sleepProfileId: String?,
     onApplyProfile: (PerformanceProfile) -> Unit,
     onApplyCurrent: (TunerState) -> Unit,
@@ -147,6 +157,7 @@ fun MainTunerScreen(
     var selectedTab by remember { mutableStateOf(MainTab.PROFILES) }
     var appToConfigure by remember { mutableStateOf<InstalledAppInfo?>(null) }
     var showAppAssignmentDialog by remember { mutableStateOf(false) }
+    var showSupportDialog by remember { mutableStateOf(false) }
 
     ScreenNotifications(
         state = state,
@@ -179,6 +190,7 @@ fun MainTunerScreen(
                     selectedTab = selectedTab,
                     onSelectTab = { selectedTab = it },
                     onOpenSettings = onOpenSettings,
+                    onOpenSupport = { showSupportDialog = true },
                     modifier = Modifier
                         .fillMaxHeight()
                         .width(188.dp)
@@ -217,6 +229,7 @@ fun MainTunerScreen(
                             when (selectedTab) {
                                 MainTab.PROFILES -> ProfileListSection(
                                     state = state,
+                                    displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                                     sleepProfileId = sleepProfileId,
                                     onOpenCreateProfile = { dialogProfileId = NEW_PROFILE_DIALOG_ID },
                                     onEditProfile = { dialogProfileId = it },
@@ -295,6 +308,7 @@ fun MainTunerScreen(
         }
         ProfileEditorDialog(
             baseState = state,
+            displayFrequenciesAsPercent = displayFrequenciesAsPercent,
             profile = profile,
             creatingNewProfile = profileId == NEW_PROFILE_DIALOG_ID,
             manualMode = profileId == ProfileStateResolver.MANUAL_PROFILE_ID,
@@ -314,18 +328,24 @@ fun MainTunerScreen(
             },
         )
     }
+
+    if (showSupportDialog) {
+        SupportClusterTuneDialog(onDismiss = { showSupportDialog = false })
+    }
 }
 
 @Composable
 fun CompactTunerScreen(
     state: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     onPolicyValueChange: (CpuPolicyInfo, Int) -> Unit,
     onApplyProfile: (PerformanceProfile) -> Unit,
     onClearSelection: () -> Unit,
     onApplyCurrent: (TunerState) -> Unit,
-    onDismissRequest: (() -> Unit)?,
+    onDismissRequest: () -> Unit,
     onRefreshLiveValues: () -> Unit,
-    onOpenFullApp: (() -> Unit)? = null,
+    onOpenFullApp: () -> Unit,
+    showCompactScrim: Boolean = true,
 ) {
     ScreenNotifications(
         state = state,
@@ -340,7 +360,7 @@ fun CompactTunerScreen(
         }
     }
 
-    ScreenContainer(compactMode = true) {
+    ScreenContainer(compactMode = true, showCompactScrim = showCompactScrim) {
         val colorScheme = MaterialTheme.colorScheme
         Column(modifier = Modifier.fillMaxSize()) {
             Column(
@@ -367,51 +387,167 @@ fun CompactTunerScreen(
                     )
                     PolicyEditorSection(
                         state = state,
+                        displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                         onPolicyValueChange = onPolicyValueChange,
                         compactMode = true,
                     )
                 }
             }
 
-            if (onDismissRequest != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(colorScheme.outlineVariant.copy(alpha = 0.48f)),
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .background(colorScheme.surfaceContainer),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colorScheme.outlineVariant.copy(alpha = 0.48f)),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .background(colorScheme.surfaceContainer),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = onDismissRequest,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                         ) {
-                            TextButton(
-                                onClick = onDismissRequest,
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                            ) {
-                                Text("Cancel")
-                            }
-                            Button(
-                                onClick = { onApplyCurrent(state) },
-                                enabled = state.policies.isNotEmpty() && state.isPServerAvailable,
-                                modifier = Modifier.height(30.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
-                            ) {
-                                Text("Apply")
-                            }
+                            Text("Cancel")
+                        }
+                        Button(
+                            onClick = { onApplyCurrent(state) },
+                            enabled = state.policies.isNotEmpty() && state.isPServerAvailable,
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                        ) {
+                            Text("Apply")
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun CompactProfilePickerScreen(
+    state: TunerState,
+    onApplyProfile: (PerformanceProfile) -> Unit,
+    onDismissRequest: () -> Unit,
+    showCompactScrim: Boolean = true,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val profiles = state.displayProfiles.filter { profile -> profile.source != ProfileSource.VIRTUAL }
+    val selectedProfileId = listOfNotNull(
+        state.activeDisplayProfileId,
+        state.lastAppliedDisplayProfileId,
+        state.selectedDisplayProfileId,
+    ).firstOrNull { profileId -> profiles.any { profile -> profile.id == profileId } }
+
+    ScreenContainer(
+        compactMode = true,
+        showCompactScrim = showCompactScrim,
+        compactFillHeight = false,
+        compactWidthFraction = 1f,
+        compactMaxWidth = 360.dp,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colorScheme.surfaceContainer)
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Pick a profile",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.onSurface,
+                )
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                    TextButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Text("Cancel", color = colorScheme.primary)
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colorScheme.outlineVariant.copy(alpha = 0.48f)),
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 340.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (profiles.isEmpty()) {
+                    ProfilePickerEmptyOptionCard()
+                } else {
+                    profiles.forEach { profile ->
+                        ProfileChoiceRow(
+                            title = profile.name,
+                            selected = selectedProfileId == profile.id,
+                            onClick = { onApplyProfile(profile) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfilePickerEmptyOptionCard() {
+    val colorScheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(20.dp)
+    val borderColor = colorScheme.outlineVariant.copy(alpha = 0.28f)
+    val contentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .background(colorScheme.surfaceContainerHigh.copy(alpha = 0.10f), shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val strokeWidth = 2.dp.toPx()
+            drawRoundRect(
+                color = borderColor,
+                topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
+                size = Size(size.width - strokeWidth, size.height - strokeWidth),
+                cornerRadius = CornerRadius(20.dp.toPx(), 20.dp.toPx()),
+                style = Stroke(
+                    width = strokeWidth,
+                    pathEffect = PathEffect.dashPathEffect(
+                        floatArrayOf(9.dp.toPx(), 6.dp.toPx()),
+                    ),
+                ),
+            )
+        }
+        Text(
+            text = "No profiles available",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+        )
     }
 }
 
@@ -464,11 +600,20 @@ private fun ScreenNotifications(
 @Composable
 private fun ScreenContainer(
     compactMode: Boolean,
+    showCompactScrim: Boolean = true,
+    compactFillHeight: Boolean = true,
+    compactWidthFraction: Float = 1f,
+    compactMaxWidth: Dp? = null,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val backgroundModifier = if (compactMode) {
-        Modifier.fillMaxSize().background(colorScheme.scrim.copy(alpha = 0.45f))
+        val modifier = Modifier.fillMaxSize()
+        if (showCompactScrim) {
+            modifier.background(colorScheme.scrim.copy(alpha = 0.45f))
+        } else {
+            modifier
+        }
     } else {
         Modifier.fillMaxSize().background(
             brush = Brush.verticalGradient(
@@ -483,18 +628,24 @@ private fun ScreenContainer(
 
     Box(modifier = backgroundModifier) {
         val containerModifier = if (compactMode) {
-            Modifier.align(Alignment.Center)
-                .fillMaxWidth()
-                .fillMaxHeight()
+            var modifier = Modifier.align(Alignment.Center)
                 .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 12.dp)
+            compactMaxWidth?.let { maxWidth ->
+                modifier = modifier.widthIn(max = maxWidth)
+            }
+            modifier = modifier.fillMaxWidth(compactWidthFraction)
+            if (compactFillHeight) {
+                modifier = modifier.fillMaxHeight()
+            }
+            modifier
         } else {
             Modifier.fillMaxSize()
         }
 
         Card(
             modifier = containerModifier,
-            shape = if (compactMode) RoundedCornerShape(30.dp, 30.dp, 24.dp, 24.dp) else RectangleShape,
+            shape = if (compactMode) RoundedCornerShape(20.dp) else RectangleShape,
             colors = CardDefaults.cardColors(
                 containerColor = if (compactMode) colorScheme.surfaceColorAtElevation(4.dp) else Color.Transparent,
             ),
@@ -509,6 +660,7 @@ private fun MainSideMenu(
     selectedTab: MainTab,
     onSelectTab: (MainTab) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSupport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -562,6 +714,99 @@ private fun MainSideMenu(
             selected = false,
             onClick = onOpenSettings,
         )
+
+        Spacer(Modifier.weight(1f))
+
+        SideMenuItem(
+            label = "Support",
+            symbol = "favorite",
+            selected = false,
+            onClick = onOpenSupport,
+        )
+    }
+}
+
+@Composable
+private fun SupportClusterTuneDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val qrCode = remember { generateQrCodeBitmap(KOFI_URL, 520).asImageBitmap() }
+    val openKofi: () -> Unit = {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(KOFI_URL)))
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            MaterialSymbol(
+                name = "favorite",
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                size = 28.dp,
+            )
+        },
+        title = {
+            Text(
+                text = "Support ClusterTune",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = SUPPORT_MESSAGE,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color.White,
+                ) {
+                    Image(
+                        bitmap = qrCode,
+                        contentDescription = "Ko-fi donation QR code",
+                        modifier = Modifier
+                            .size(196.dp)
+                            .padding(12.dp),
+                    )
+                }
+                Text(
+                    text = KOFI_URL,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.clickable(onClick = openKofi),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = openKofi) {
+                Text("Open Ko-fi")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+private fun generateQrCodeBitmap(content: String, size: Int): Bitmap {
+    val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
+    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                setPixel(x, y, if (matrix[x, y]) AndroidColor.BLACK else AndroidColor.WHITE)
+            }
+        }
     }
 }
 
@@ -690,6 +935,7 @@ private fun Header(
 @Composable
 private fun CurrentFrequenciesCard(
     state: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     onEditManual: () -> Unit = {},
 ) {
     if (state.policies.isEmpty()) {
@@ -724,6 +970,7 @@ private fun CurrentFrequenciesCard(
                     policy.id to (state.actualValues[policy.id] ?: policy.currentMaxFreq)
                 },
                 policies = state.policies,
+                displayAsPercent = displayFrequenciesAsPercent,
                 modifier = Modifier.weight(1f),
             )
             CompositionLocalProvider(
@@ -1478,6 +1725,7 @@ private fun ProfileChoiceRow(
     title: String,
     selected: Boolean,
     onClick: () -> Unit,
+    compact: Boolean = false,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
@@ -1502,25 +1750,30 @@ private fun ProfileChoiceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .heightIn(min = if (compact) 38.dp else 48.dp)
             .background(containerBrush, rowShape)
             .border(BorderStroke(1.dp, borderColor), rowShape)
             .clip(rowShape)
             .clickable(onClick = onClick)
-            .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(
+                start = if (compact) 8.dp else 12.dp,
+                top = 8.dp,
+                end = 12.dp,
+                bottom = if (compact) 10.dp else 8.dp,
+            ),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = title,
             modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.titleSmall,
+            style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             color = titleColor,
             maxLines = 1,
         )
         Surface(
-            modifier = Modifier.size(26.dp),
+            modifier = Modifier.size(if (compact) 22.dp else 26.dp),
             shape = RoundedCornerShape(999.dp),
             color = if (selected) colorScheme.primary else Color.Transparent,
             border = BorderStroke(
@@ -1534,8 +1787,8 @@ private fun ProfileChoiceRow(
                     name = "check",
                     contentDescription = "Selected",
                     tint = colorScheme.onPrimary,
-                    size = 18.dp,
-                    modifier = Modifier.padding(4.dp),
+                    size = if (compact) 15.dp else 18.dp,
+                    modifier = Modifier.padding(if (compact) 3.dp else 4.dp),
                 )
             }
         }
@@ -1546,13 +1799,13 @@ private fun ProfileChoiceRow(
 private fun AssignmentEmptyState(title: String, message: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(start = 8.dp, top = 8.dp, end = 12.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = title,
@@ -1613,6 +1866,7 @@ private fun AppIcon(
 @Composable
 private fun ProfileListSection(
     state: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     sleepProfileId: String?,
     onOpenCreateProfile: () -> Unit,
     onEditProfile: (String) -> Unit,
@@ -1627,6 +1881,7 @@ private fun ProfileListSection(
     ) {
         CurrentFrequenciesCard(
             state = state,
+            displayFrequenciesAsPercent = displayFrequenciesAsPercent,
             onEditManual = onEditManual,
         )
 
@@ -1670,6 +1925,8 @@ private fun ProfileListSection(
                             showReorder = true,
                             showEdit = profile.isEditable,
                             valuePreview = profile.maxFrequencies,
+                            policies = state.policies,
+                            displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                             isDragging = isDragging,
                             dragActive = draggingProfileId != null,
                             onActivate = { onActivateProfile(profile) },
@@ -1775,6 +2032,8 @@ private fun ProfileListRow(
     showReorder: Boolean,
     showEdit: Boolean,
     valuePreview: Map<Int, Int>,
+    policies: List<CpuPolicyInfo>,
+    displayFrequenciesAsPercent: Boolean,
     isDragging: Boolean,
     dragActive: Boolean,
     onActivate: () -> Unit,
@@ -1861,6 +2120,8 @@ private fun ProfileListRow(
             if (valuePreview.isNotEmpty()) {
                 InlineFrequencyMetadata(
                     values = valuePreview,
+                    policies = policies,
+                    displayAsPercent = displayFrequenciesAsPercent,
                     valueColor = metadataContentColor,
                 )
             }
@@ -1979,6 +2240,7 @@ private fun InlineFrequencyMetadata(
     valueColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.86f),
     labelColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
     policies: List<CpuPolicyInfo> = emptyList(),
+    displayAsPercent: Boolean = false,
 ) {
     val policiesById = policies.associateBy { it.id }
     Row(
@@ -2008,7 +2270,12 @@ private fun InlineFrequencyMetadata(
                 )
                 val policy = policiesById[policyId]
                 Text(
-                    text = formatFrequency(value, boosted = policy?.isBoosted(value) == true),
+                    text = formatFrequency(
+                        valueKhz = value,
+                        boosted = policy?.isBoosted(value) == true,
+                        policy = policy,
+                        displayAsPercent = displayAsPercent,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = valueColor,
                     maxLines = 1,
@@ -2098,6 +2365,7 @@ private fun ProfileSelectorChip(
 @Composable
 private fun PolicyEditorSection(
     state: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     onPolicyValueChange: (CpuPolicyInfo, Int) -> Unit,
     compactMode: Boolean,
 ) {
@@ -2113,6 +2381,7 @@ private fun PolicyEditorSection(
             actualValue = state.actualValues[policy.id] ?: policy.currentMaxFreq,
             onValueChanged = { onPolicyValueChange(policy, it) },
             compactMode = compactMode,
+            displayFrequenciesAsPercent = displayFrequenciesAsPercent,
         )
     }
 }
@@ -2120,6 +2389,7 @@ private fun PolicyEditorSection(
 @Composable
 private fun ProfileEditorDialog(
     baseState: TunerState,
+    displayFrequenciesAsPercent: Boolean,
     profile: PerformanceProfile?,
     creatingNewProfile: Boolean,
     manualMode: Boolean,
@@ -2180,6 +2450,7 @@ private fun ProfileEditorDialog(
                                 editedValues = editedValues + (policy.id to editedValue)
                             },
                             compactMode = true,
+                            displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                         )
                     }
                 }
@@ -2289,6 +2560,7 @@ private fun PolicyCard(
     selectedValue: Int,
     onValueChanged: (Int) -> Unit,
     compactMode: Boolean = false,
+    displayFrequenciesAsPercent: Boolean = false,
     actualValue: Int = selectedValue,
 ) {
     val supported = policy.supportedFrequencies
@@ -2306,16 +2578,35 @@ private fun PolicyCard(
         CompositionLocalProvider(
             LocalMinimumInteractiveComponentSize provides if (compactMode) Dp.Unspecified else 48.dp,
         ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val tightRow = maxWidth < 420.dp
+                val veryTightRow = maxWidth < 340.dp
+                val horizontalGap = when {
+                    veryTightRow -> 4.dp
+                    tightRow -> 5.dp
+                    else -> 6.dp
+                }
+                val clusterColumnWidth = when {
+                    veryTightRow -> 72.dp
+                    tightRow -> 84.dp
+                    else -> 96.dp
+                }
+                val valueColumnWidth = when {
+                    veryTightRow -> 58.dp
+                    tightRow -> 66.dp
+                    else -> 76.dp
+                }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 62.dp)
                     .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(horizontalGap),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(
-                    modifier = Modifier.width(128.dp),
+                    modifier = Modifier.width(clusterColumnWidth),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
@@ -2324,12 +2615,14 @@ private fun PolicyCard(
                         fontWeight = FontWeight.SemiBold,
                         color = colorScheme.onSurface,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "Now ${formatFrequency(actualValue, boosted = policy.isBoosted(actualValue))}",
+                        text = "Now ${formatFrequency(actualValue, boosted = policy.isBoosted(actualValue), policy = policy, displayAsPercent = displayFrequenciesAsPercent)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.84f),
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
 
@@ -2341,14 +2634,16 @@ private fun PolicyCard(
                 )
 
                 Text(
-                    text = formatFrequency(selectedValue, boosted = policy.isBoosted(selectedValue)),
-                    modifier = Modifier.width(88.dp),
+                    text = formatFrequency(selectedValue, boosted = policy.isBoosted(selectedValue), policy = policy, displayAsPercent = displayFrequenciesAsPercent),
+                    modifier = Modifier.width(valueColumnWidth),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = colorScheme.primary,
                     textAlign = TextAlign.End,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+            }
             }
         }
     }
@@ -2468,11 +2763,21 @@ private fun CpuPolicyInfo.isBoosted(valueKhz: Int): Boolean {
     return valueKhz > selectableMaxFreq
 }
 
-internal fun formatFrequency(valueKhz: Int, boosted: Boolean = false): String {
-    val base = when {
-        valueKhz >= 1_000_000 -> String.format("%.2f GHz", valueKhz / 1_000_000f)
-        valueKhz >= 1_000 -> String.format("%.0f MHz", valueKhz / 1_000f)
-        else -> "$valueKhz kHz"
+internal fun formatFrequency(
+    valueKhz: Int,
+    boosted: Boolean = false,
+    policy: CpuPolicyInfo? = null,
+    displayAsPercent: Boolean = false,
+): String {
+    val base = if (displayAsPercent && policy != null && policy.selectableMaxFreq > 0) {
+        val percent = ((valueKhz.toFloat() / policy.selectableMaxFreq.toFloat()) * 100f).roundToInt()
+        "$percent%"
+    } else {
+        when {
+            valueKhz >= 1_000_000 -> String.format("%.2f GHz", valueKhz / 1_000_000f)
+            valueKhz >= 1_000 -> String.format("%.0f MHz", valueKhz / 1_000f)
+            else -> "$valueKhz kHz"
+        }
     }
     return if (boosted) "$base+" else base
 }

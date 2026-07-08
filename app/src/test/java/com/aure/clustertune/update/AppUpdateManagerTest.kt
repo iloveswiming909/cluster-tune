@@ -66,6 +66,48 @@ class AppUpdateManagerTest {
     }
 
     @Test
+    fun `parser ignores prereleases unless enabled`() {
+        val rawJson =
+            """
+            [
+              {
+                "tag_name": "v0.5.0-beta.1",
+                "name": "v0.5.0-beta.1",
+                "prerelease": true,
+                "draft": false,
+                "assets": [
+                  {
+                    "name": "ClusterTune-v0.5.0-beta.1.apk",
+                    "browser_download_url": "https://example.invalid/beta.apk"
+                  }
+                ]
+              },
+              {
+                "tag_name": "v0.4.0",
+                "name": "v0.4.0",
+                "prerelease": false,
+                "draft": false,
+                "assets": [
+                  {
+                    "name": "ClusterTune-v0.4.0.apk",
+                    "browser_download_url": "https://example.invalid/stable.apk"
+                  }
+                ]
+              }
+            ]
+            """.trimIndent()
+
+        assertEquals(
+            "v0.4.0",
+            GitHubReleaseParser.parseLatestRelease(rawJson).tagName,
+        )
+        assertEquals(
+            "v0.5.0-beta.1",
+            GitHubReleaseParser.parseLatestRelease(rawJson, includePrereleases = true).tagName,
+        )
+    }
+
+    @Test
     fun `automatic update policy checks only when enabled and interval elapsed`() {
         val dayMillis = 24L * 60L * 60L * 1_000L
 

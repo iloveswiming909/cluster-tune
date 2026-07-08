@@ -35,8 +35,8 @@ android {
         applicationId = "com.aure.clustertune"
         minSdk = 31
         targetSdk = 34
-        versionCode = 301
-        versionName = "0.3.1"
+        versionCode = 302
+        versionName = "0.3.2-beta.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -100,6 +100,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-service:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.6")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
@@ -111,6 +112,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 

@@ -23,14 +23,17 @@ import java.net.URL
 class AppUpdateManager(
     private val context: Context,
     currentVersionName: String? = null,
-    private val releasesUrl: String = DEFAULT_LATEST_RELEASE_URL,
+    private val releasesUrl: String = DEFAULT_RELEASES_URL,
 ) {
     private val currentVersionName: String = currentVersionName ?: context.currentVersionName()
 
-    suspend fun checkForUpdates(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdates(includePrereleases: Boolean = false): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         runCatching {
             val json = httpGetText(releasesUrl)
-            val release = GitHubReleaseParser.parseLatestRelease(json)
+            val release = GitHubReleaseParser.parseLatestRelease(
+                rawJson = json,
+                includePrereleases = includePrereleases,
+            )
             val current = SemanticVersion.parse(currentVersionName)
             val latest = SemanticVersion.parse(release.versionName)
             if (current == null || latest == null || latest <= current) {
@@ -117,8 +120,8 @@ class AppUpdateManager(
 
     companion object {
         private const val NETWORK_TIMEOUT_MS = 15_000
-        const val DEFAULT_LATEST_RELEASE_URL =
-            "https://api.github.com/repos/AurelioB/ClusterTune/releases/latest"
+        const val DEFAULT_RELEASES_URL =
+            "https://api.github.com/repos/AurelioB/ClusterTune/releases"
     }
 }
 
@@ -163,8 +166,18 @@ object UpdateCheckPolicy {
 }
 
 object GitHubReleaseParser {
-    fun parseLatestRelease(rawJson: String): AppRelease {
-        val root = Json.parseToJsonElement(rawJson).jsonObject
+    fun parseLatestRelease(rawJson: String, includePrereleases: Boolean = false): AppRelease {
+        val rootElement = Json.parseToJsonElement(rawJson)
+        val root = when (rootElement) {
+            is JsonArray -> rootElement
+                .map { it.jsonObject }
+                .firstOrNull { release ->
+                    release.boolean("draft") != true &&
+                        (includePrereleases || release.boolean("prerelease") != true)
+                }
+                ?: error("No eligible ClusterTune releases found")
+            else -> rootElement.jsonObject
+        }
         val tagName = root.string("tag_name") ?: error("Release is missing tag_name")
         val versionName = tagName.removePrefix("v")
         val assets = root["assets"]?.jsonArray ?: JsonArray(emptyList())
@@ -195,6 +208,10 @@ object GitHubReleaseParser {
 
     private fun JsonObject.string(name: String): String? {
         return this[name]?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun JsonObject.boolean(name: String): Boolean? {
+        return this[name]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
     }
 }
 

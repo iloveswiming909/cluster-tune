@@ -116,6 +116,7 @@ fun SettingsScreen(
     onColorSourceChange: (AppColorSource) -> Unit,
     onAccentColorChange: (Int) -> Unit,
     onCustomAccentColorChange: (Int) -> Unit,
+    onDisplayFrequenciesAsPercentChange: (Boolean) -> Unit,
     onTileTapBehaviorChange: (TileInteractionBehavior) -> Unit,
     onApplyLastProfileOnBootChange: (Boolean) -> Unit,
     sleepProfileOptions: List<PerformanceProfile>,
@@ -127,9 +128,12 @@ fun SettingsScreen(
     onRequestAddQuickSettingsTile: () -> Unit,
     canRequestAddQuickSettingsTile: Boolean,
     isQuickSettingsTileAdded: Boolean,
+    canDrawOverlays: Boolean,
+    onOpenOverlayPermissionSettings: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onAutomaticUpdateChecksEnabledChange: (Boolean) -> Unit,
     onUpdateCheckIntervalDaysChange: (Int) -> Unit,
+    onIncludePrereleaseUpdatesChange: (Boolean) -> Unit,
     onProfileSwitchToastsEnabledChange: (Boolean) -> Unit,
     onProfileSwitchHistoryLimitChange: (Int) -> Unit,
     onPrivilegedExecutionMethodChange: (String?) -> Unit,
@@ -181,6 +185,30 @@ fun SettingsScreen(
                 onAccentColorChange = onAccentColorChange,
                 onCustomAccentColorChange = onCustomAccentColorChange,
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Show frequencies as percent",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Display CPU frequency values as a percentage of each cluster's selectable maximum.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Switch(
+                    checked = settings.displayFrequenciesAsPercent,
+                    onCheckedChange = onDisplayFrequenciesAsPercentChange,
+                )
+            }
         }
 
         SettingsSection(title = "Updates", symbol = "update") {
@@ -214,6 +242,30 @@ fun SettingsScreen(
                     Text("Check")
                 }
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Include pre-releases",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Show beta and release-candidate builds when checking for updates.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Switch(
+                    checked = settings.includePrereleaseUpdates,
+                    onCheckedChange = onIncludePrereleaseUpdatesChange,
+                )
+            }
         }
 
         SettingsSection(title = "Quick Settings Tile", symbol = "grid_view") {
@@ -245,6 +297,33 @@ fun SettingsScreen(
                     selected = settings.tileTapBehavior,
                     onChange = onTileTapBehaviorChange,
                 )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Overlay permission",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = if (canDrawOverlays) {
+                            "Granted. Quick Settings can show the compact tuner over the current app."
+                        } else {
+                            "Not granted. Quick Settings will use the existing dialog fallback."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TextButton(onClick = onOpenOverlayPermissionSettings) {
+                    Text(if (canDrawOverlays) "Manage" else "Grant")
+                }
             }
         }
 
@@ -1084,29 +1163,46 @@ private fun TileBehaviorSelector(
     selected: TileInteractionBehavior,
     onChange: (TileInteractionBehavior) -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TileBehaviorOption(
-            title = "Quick settings dialog",
-            selected = selected == TileInteractionBehavior.SHOW_DIALOG,
-            onClick = { onChange(TileInteractionBehavior.SHOW_DIALOG) },
-            modifier = Modifier.weight(1f),
-        )
-        TileBehaviorOption(
-            title = "Cycle profiles",
-            selected = selected == TileInteractionBehavior.CYCLE_PROFILES,
-            onClick = { onChange(TileInteractionBehavior.CYCLE_PROFILES) },
-            modifier = Modifier.weight(1f),
-        )
-        TileBehaviorOption(
-            title = "Open app",
-            selected = selected == TileInteractionBehavior.OPEN_APP,
-            onClick = { onChange(TileInteractionBehavior.OPEN_APP) },
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TileBehaviorOption(
+                title = "Quick tuner",
+                selected = selected == TileInteractionBehavior.SHOW_DIALOG,
+                onClick = { onChange(TileInteractionBehavior.SHOW_DIALOG) },
+                modifier = Modifier.weight(1f),
+            )
+            TileBehaviorOption(
+                title = "Profile picker",
+                selected = selected == TileInteractionBehavior.SHOW_PROFILE_PICKER,
+                onClick = { onChange(TileInteractionBehavior.SHOW_PROFILE_PICKER) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TileBehaviorOption(
+                title = "Cycle profiles",
+                selected = selected == TileInteractionBehavior.CYCLE_PROFILES,
+                onClick = { onChange(TileInteractionBehavior.CYCLE_PROFILES) },
+                modifier = Modifier.weight(1f),
+            )
+            TileBehaviorOption(
+                title = "Open app",
+                selected = selected == TileInteractionBehavior.OPEN_APP,
+                onClick = { onChange(TileInteractionBehavior.OPEN_APP) },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

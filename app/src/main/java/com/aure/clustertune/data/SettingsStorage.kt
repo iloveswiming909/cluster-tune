@@ -40,7 +40,9 @@ class SettingsStorage(private val context: Context) {
     private val customAccentColorKey = intPreferencesKey("custom_accent_color")
     private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
     private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
+    private val includePrereleaseUpdatesKey = booleanPreferencesKey("include_prerelease_updates")
     private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
+    private val displayFrequenciesAsPercentKey = booleanPreferencesKey("display_frequencies_as_percent")
     private val profileSwitchToastsEnabledKey = booleanPreferencesKey("profile_switch_toasts_enabled")
     private val profileSwitchHistoryLimitKey = intPreferencesKey("profile_switch_history_limit")
     private val privilegedExecutionMethodIdKey = stringPreferencesKey("privileged_execution_method_id")
@@ -64,7 +66,9 @@ class SettingsStorage(private val context: Context) {
             isQuickSettingsTileAdded = preferences[quickSettingsTileAddedKey] ?: false,
             automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
             updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
+            includePrereleaseUpdates = preferences[includePrereleaseUpdatesKey] ?: false,
             lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
+            displayFrequenciesAsPercent = preferences[displayFrequenciesAsPercentKey] ?: false,
             profileSwitchToastsEnabled = preferences[profileSwitchToastsEnabledKey] ?: true,
             profileSwitchHistoryLimit = (preferences[profileSwitchHistoryLimitKey]
                 ?: DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT)
@@ -155,9 +159,21 @@ class SettingsStorage(private val context: Context) {
         }
     }
 
+    suspend fun persistIncludePrereleaseUpdates(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[includePrereleaseUpdatesKey] = enabled
+        }
+    }
+
     suspend fun persistLastUpdateCheckMillis(timestampMillis: Long) {
         context.settingsDataStore.edit { preferences ->
             preferences[lastUpdateCheckMillisKey] = timestampMillis
+        }
+    }
+
+    suspend fun persistDisplayFrequenciesAsPercent(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[displayFrequenciesAsPercentKey] = enabled
         }
     }
 

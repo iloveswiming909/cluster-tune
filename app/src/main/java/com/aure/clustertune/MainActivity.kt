@@ -18,14 +18,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.aure.clustertune.apps.AppProfileMonitorService
+import com.aure.clustertune.overlay.OverlayPermission
 import com.aure.clustertune.sleep.SleepProfileMonitorService
 import com.aure.clustertune.tile.QuickSettingsTileAddResult
 import com.aure.clustertune.tile.QuickSettingsTilePrompt
@@ -97,6 +102,19 @@ class MainActivity : ComponentActivity() {
                     val launchableApps = viewModel.launchableApps.collectAsStateWithLifecycle().value
                     val recentActiveApps = viewModel.recentActiveApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var overlayPermissionRefresh by remember { mutableStateOf(0) }
+                    DisposableEffect(Unit) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_RESUME) {
+                                overlayPermissionRefresh++
+                            }
+                        }
+                        lifecycle.addObserver(observer)
+                        onDispose { lifecycle.removeObserver(observer) }
+                    }
+                    val canDrawOverlays = remember(overlayPermissionRefresh) {
+                        OverlayPermission.canDrawOverlays(this@MainActivity)
+                    }
 
                     if (showSettings) {
                         SettingsScreen(
@@ -105,6 +123,7 @@ class MainActivity : ComponentActivity() {
                             onColorSourceChange = viewModel::setColorSource,
                             onAccentColorChange = viewModel::setAccentColor,
                             onCustomAccentColorChange = viewModel::setCustomAccentColor,
+                            onDisplayFrequenciesAsPercentChange = viewModel::setDisplayFrequenciesAsPercent,
                             onTileTapBehaviorChange = { behavior ->
                                 viewModel.setTileTapBehavior(behavior) {
                                     QuickSettingsTileRefresher.requestUpdate(this@MainActivity)
@@ -136,9 +155,14 @@ class MainActivity : ComponentActivity() {
                             },
                             canRequestAddQuickSettingsTile = QuickSettingsTilePrompt.isSupported,
                             isQuickSettingsTileAdded = settings.isQuickSettingsTileAdded,
+                            canDrawOverlays = canDrawOverlays,
+                            onOpenOverlayPermissionSettings = {
+                                startActivity(OverlayPermission.createSettingsIntent(this@MainActivity))
+                            },
                             onCheckForUpdates = { checkForUpdates(showUpToDateToast = true) },
                             onAutomaticUpdateChecksEnabledChange = viewModel::setAutomaticUpdateChecksEnabled,
                             onUpdateCheckIntervalDaysChange = viewModel::setUpdateCheckIntervalDays,
+                            onIncludePrereleaseUpdatesChange = viewModel::setIncludePrereleaseUpdates,
                             onProfileSwitchToastsEnabledChange = viewModel::setProfileSwitchToastsEnabled,
                             onProfileSwitchHistoryLimitChange = viewModel::setProfileSwitchHistoryLimit,
                             onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
@@ -149,6 +173,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         MainTunerScreen(
                             state = state,
+                            displayFrequenciesAsPercent = settings.displayFrequenciesAsPercent,
                             sleepProfileId = settings.sleepProfileId.takeIf { settings.sleepProfileEnabled },
                             onApplyProfile = viewModel::applyProfile,
                             onApplyCurrent = { tunerState ->
@@ -325,7 +350,8 @@ class MainActivity : ComponentActivity() {
                 SingleToast.show(applicationContext, "Checking for updates…", Toast.LENGTH_SHORT)
             }
             container.settingsStorage.persistLastUpdateCheckMillis(System.currentTimeMillis())
-            appUpdateManager.checkForUpdates()
+            val settings = container.settingsStorage.settings.first()
+            appUpdateManager.checkForUpdates(includePrereleases = settings.includePrereleaseUpdates)
                 .onSuccess { result ->
                     when (result) {
                         is UpdateCheckResult.UpToDate -> {

@@ -321,6 +321,18 @@ class TunerViewModel(
         }
     }
 
+    fun setIncludePrereleaseUpdates(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistIncludePrereleaseUpdates(enabled)
+        }
+    }
+
+    fun setDisplayFrequenciesAsPercent(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistDisplayFrequenciesAsPercent(enabled)
+        }
+    }
+
     fun setProfileSwitchToastsEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsStorage.persistProfileSwitchToastsEnabled(enabled)
@@ -392,8 +404,8 @@ class TunerViewModel(
         val summary = state.policies.joinToString(", ") { policy ->
             val requested = state.currentValues[policy.id] ?: policy.currentMaxFreq
             val actual = actualValues[policy.id] ?: policy.currentMaxFreq
-            "C${policy.id} requested ${formatFrequency(requested)}, " +
-                "actual ${formatFrequency(actual, boosted = actual > policy.selectableMaxFreq)}"
+            "C${policy.id} requested ${formatFrequency(requested, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}, " +
+                "actual ${formatFrequency(actual, boosted = actual > policy.selectableMaxFreq, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}"
         }
         val base = "Apply did not stick: $summary"
         return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base

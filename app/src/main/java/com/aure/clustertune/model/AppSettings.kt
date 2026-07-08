@@ -7,6 +7,7 @@ enum class AppColorSource {
 
 enum class TileInteractionBehavior {
     SHOW_DIALOG,
+    SHOW_PROFILE_PICKER,
     CYCLE_PROFILES,
     OPEN_APP,
 }
@@ -23,7 +24,9 @@ data class AppSettings(
     val isQuickSettingsTileAdded: Boolean = false,
     val automaticUpdateChecksEnabled: Boolean = true,
     val updateCheckIntervalDays: Int = 7,
+    val includePrereleaseUpdates: Boolean = false,
     val lastUpdateCheckMillis: Long = 0L,
+    val displayFrequenciesAsPercent: Boolean = false,
     val profileSwitchToastsEnabled: Boolean = true,
     val profileSwitchHistoryLimit: Int = DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT,
     val privilegedExecutionMethodId: String? = null,
