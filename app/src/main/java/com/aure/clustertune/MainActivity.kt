@@ -87,6 +87,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // DIAGNOSTIC: probe Qualcomm BoostFramework / vendor.perfservice as an
+        // alternative privileged write path (PServer is SELinux-blocked for
+        // untrusted_app on Odin 2 Mini). Logs under tag "ClusterTuneBoost".
+        Thread {
+            runCatching {
+                com.aure.clustertune.root.BoostFrameworkProbe.run(applicationContext)
+            }
+        }.start()
         enableEdgeToEdge()
         maybeRequestQuickSettingsTileOnFirstRun()
         maybeAutoDetectPrivilegedExecutionOnFirstRun()
