@@ -99,27 +99,73 @@ object BoostFrameworkProbe {
     }
 
     private fun tryConstructBoostFramework(context: Context): Any? {
-        // Try android.util.BoostFramework(Context) then no-arg, then
-        // com.qualcomm.qti.performance variants.
         val classNames = listOf(
             "android.util.BoostFramework",
             "com.qualcomm.qti.Performance",
         )
         for (name in classNames) {
             val clazz = runCatching { Class.forName(name) }.getOrNull() ?: continue
-            // Try (Context)
-            runCatching {
-                val ctor = clazz.getConstructor(Context::class.java)
-                return ctor.newInstance(context)
+
+            // Enumerate ALL declared constructors and try each, filling
+            // parameters with plausible values. BoostFramework's ctor
+            // signature varies widely across Android/Qualcomm releases.
+            val ctors = clazz.declaredConstructors
+            Log.d(TAG, "Class $name has ${ctors.size} constructor(s)")
+            for (ctor in ctors) {
+                val paramTypes = ctor.parameterTypes
+                val sig = paramTypes.joinToString(",") { it.simpleName }
+                val args = buildConstructorArgs(paramTypes, context)
+                if (args == null) {
+                    Log.d(TAG, "  ctor($sig): no arg-fill strategy, skipping")
+                    continue
+                }
+                val instance = runCatching {
+                    ctor.isAccessible = true
+                    ctor.newInstance(*args)
+                }
+                if (instance.isSuccess && instance.getOrNull() != null) {
+                    Log.d(TAG, "  ctor($sig): SUCCESS")
+                    return instance.getOrNull()
+                } else {
+                    Log.d(TAG, "  ctor($sig): failed - ${instance.exceptionOrNull()?.cause?.message ?: instance.exceptionOrNull()?.message}")
+                }
             }
-            // Try no-arg
-            runCatching {
-                val ctor = clazz.getConstructor()
-                return ctor.newInstance()
+            Log.d(TAG, "Found class $name but no constructor could be invoked")
+            // Dump full ctor signatures + perfLock* methods to guide the
+            // next iteration.
+            clazz.declaredConstructors.forEach { c ->
+                Log.d(TAG, "  available ctor: ${c.parameterTypes.joinToString(",") { it.name }}")
             }
-            Log.d(TAG, "Found class $name but no usable constructor")
+            clazz.methods.filter { it.name.startsWith("perfLock") || it.name.startsWith("perfHint") || it.name.startsWith("perfGet") }
+                .forEach { m ->
+                    Log.d(TAG, "  available method: ${m.name}(${m.parameterTypes.joinToString(",") { it.simpleName }})")
+                }
         }
         return null
+    }
+
+    /**
+     * Produce a plausible argument array for [paramTypes], or null if we
+     * don't know how to fill one of the parameters. Context params get
+     * [context]; boolean params get false; String params get null;
+     * everything else null (reference) — which covers the common
+     * BoostFramework signatures like (Context), (boolean),
+     * (Context, boolean), (Context, String), ().
+     */
+    private fun buildConstructorArgs(paramTypes: Array<Class<*>>, context: Context): Array<Any?>? {
+        val args = arrayOfNulls<Any?>(paramTypes.size)
+        for (i in paramTypes.indices) {
+            val t = paramTypes[i]
+            args[i] = when {
+                t == Context::class.java || Context::class.java.isAssignableFrom(t) -> context
+                t == Boolean::class.javaPrimitiveType -> false
+                t == Int::class.javaPrimitiveType -> 0
+                t == Long::class.javaPrimitiveType -> 0L
+                t.isPrimitive -> return null // some other primitive we can't guess
+                else -> null // reference type: pass null
+            }
+        }
+        return args
     }
 
     private fun findPerfLockAcquire(framework: Any): Method? {

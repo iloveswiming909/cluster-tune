@@ -1,51 +1,33 @@
-ClusterTune BoostFramework probe build
-======================================
+ClusterTune BoostFramework probe build (v2 - exhaustive constructor)
+====================================================================
 
-WHY: PServer is SELinux-blocked for untrusted_app on the Odin 2 Mini
-(confirmed: avc denied untrusted_app -> pservice binder call, enforcing).
-So no PServer-based method can ever work in a normal app.
+STATUS: The first probe found android.util.BoostFramework exists and
+there was NO SELinux denial (boost-avc.log was empty) — so untrusted_app
+is NOT blocked from this path. We just couldn't hit the right
+constructor signature.
 
-This build tests the last remaining candidate: Qualcomm's BoostFramework
-/ vendor.perfservice (com.qualcomm.qti.IPerfManager), which runs as the
-`system` user and CAN write the cpufreq max-freq sysnodes. It's the API
-games use for perf boosts, so untrusted_app may be allowed to call it.
+This v2 probe enumerates ALL of BoostFramework's constructors, tries
+each with plausible args (Context/false/null), and if it still can't
+construct, DUMPS every constructor signature and perfLock*/perfHint*
+method so we know exactly what the real API looks like.
 
-The documented MPCTLV3 opcodes set per-cluster MAX frequency (a downward
-cap), which is exactly what we need:
-  prime cluster (policy7): 0x40804200
-
-WHAT IT DOES: On every app launch, a background probe (tag
-"ClusterTuneBoost") constructs BoostFramework, reads policy7
-scaling_max_freq, then calls perfLockAcquire with the prime max-freq
-opcode and several candidate value encodings, reading the frequency back
-after each to see if it moved.
-
-HOW TO TEST:
-  1. Build this via your GitHub Actions (same as before). Remember to
-     DELETE app/src/main/java/com/aure/clustertune/ui/OdinHandoffDialog.kt
-     from your fork if it's still there (it's already absent from this
-     tree).
-  2. Sideload the APK.
+HOW TO TEST (same as before):
+  1. Build via GitHub Actions.
+  2. Sideload.
   3. On PC:
        cd C:\platform-tools
        .\adb logcat -c
-     Open ClusterTune, wait ~10 seconds, then:
-       .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe.log
-  4. Upload boost-probe.log.
+     Open ClusterTune, wait ~10s, then:
+       .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe2.log
+       .\adb logcat -d | Select-String -Pattern "avc.*perf" | Out-File -Encoding utf8 boost-avc2.log
+  4. Upload both.
 
-WHAT THE LOG WILL TELL US:
-  - "Could not construct BoostFramework" -> class missing/blocked; dead end.
-  - "BoostFramework constructed OK" + no SELinux denial -> callable!
-  - "*** CHANGED ***" on any TRY line -> that opcode+value moved the
-    frequency. We win: a no-root, no-PServer write path exists, and we
-    know the exact encoding to use.
-  - All "(no change)" -> callable but these opcodes/values don't cap on
-    this firmware; may need different opcodes or perfservice may refuse
-    downward caps from an app.
+WHAT WE'LL LEARN:
+  - "ctor(...): SUCCESS" then TRY lines -> we constructed it; the TRY
+    lines show whether any opcode/value moved scaling_max_freq
+    (look for *** CHANGED ***).
+  - Still can't construct -> the "available ctor:" and "available
+    method:" dumps tell us the exact signatures, and the next build
+    will target them precisely.
 
-Also worth grabbing alongside (shows any SELinux denial for perfservice):
-       .\adb logcat -d | Select-String -Pattern "avc.*perf" | Out-File -Encoding utf8 boost-avc.log
-
-NOTE: This build still contains the pserver-noout method and other WIP,
-but those are inert on the Mini (SELinux-blocked). Only the BoostFramework
-probe matters for this test.
+Either outcome moves us forward.
