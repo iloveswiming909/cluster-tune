@@ -28,6 +28,10 @@ val hasReleaseSigningConfig = listOf(
 ).all { it != null }
 
 android {
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
     namespace = "com.aure.clustertune"
     compileSdk = 34
 
@@ -115,6 +119,10 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+    // Bypass Android's hidden-API reflection restriction so we can
+    // reflect on @hide framework classes like android.util.BoostFramework
+    // on Android 13. Robust on Android 10+ (does not rely on ART internals).
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
     debugImplementation(composeBom)
     debugImplementation("androidx.compose.ui:ui-tooling")

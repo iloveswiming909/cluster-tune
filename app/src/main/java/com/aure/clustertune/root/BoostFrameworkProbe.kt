@@ -43,6 +43,15 @@ object BoostFrameworkProbe {
     fun run(context: Context) {
         Log.d(TAG, "===== BoostFramework probe begin =====")
 
+        // Unlock hidden-API reflection: android.util.BoostFramework is a
+        // @hide class, so on Android 13 its members are filtered from
+        // third-party reflection (declaredConstructors returns empty).
+        // This exemption makes them visible again. Robust on Android 10+.
+        val exempted = runCatching {
+            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("L")
+        }
+        Log.d(TAG, "hidden-API exemption added: ${exempted.getOrNull() ?: exempted.exceptionOrNull()?.message}")
+
         val framework = tryConstructBoostFramework(context)
         if (framework == null) {
             Log.d(TAG, "Could not construct BoostFramework - class missing or blocked. STOP.")
