@@ -175,7 +175,7 @@ class CpuPolicyDetectorTest {
     }
 
     @Test
-    fun `does not fall back to normal reads when privileged reader is configured`() {
+    fun `uses direct sysfs reads before privileged reader`() {
         val fileSystem = FakeSysfsFileSystem(
             directories = listOf("/sys/devices/system/cpu/cpufreq/policy0"),
             files = mapOf(
@@ -192,9 +192,10 @@ class CpuPolicyDetectorTest {
             privilegedReader = privilegedReader,
         )
 
-        val result = detector.detectPolicies()
+        val result = detector.detectPolicies().single()
 
-        assertTrue(result.isEmpty())
+        assertEquals(0, result.id)
+        assertEquals(2_016_000, result.currentMaxFreq)
     }
 
     @Test
@@ -222,16 +223,185 @@ class CpuPolicyDetectorTest {
         assertTrue(result.all { it.id == 1 })
     }
 
+    @Test
+    fun `falls back to privileged lister when normal policy listing is empty`() {
+        val fileSystem = FakeSysfsFileSystem(
+            directories = emptyList(),
+            files = emptyMap(),
+        )
+        val privilegedReader = FakePrivilegedSysfsReader(
+            mapOf(
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies" to "300000 1228800 2745600",
+                "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq" to "2745600",
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq" to "1228800",
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq" to "300000",
+                "/sys/devices/system/cpu/cpufreq/policy0/affected_cpus" to "0 1 2",
+                "/sys/devices/system/cpu/cpufreq/policy7/scaling_available_frequencies" to "806400 1612800 3187200",
+                "/sys/devices/system/cpu/cpufreq/policy7/cpuinfo_max_freq" to "3187200",
+                "/sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq" to "3187200",
+                "/sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq" to "806400",
+                "/sys/devices/system/cpu/cpufreq/policy7/affected_cpus" to "7",
+            ),
+        )
+        val privilegedLister = FakePrivilegedSysfsLister(
+            listings = mapOf(
+                ("/sys/devices/system/cpu/cpufreq" to "policy") to listOf(
+                    "/sys/devices/system/cpu/cpufreq/policy7",
+                    "/sys/devices/system/cpu/cpufreq/policy0",
+                ),
+            ),
+        )
+
+        val detector = CpuPolicyDetector(
+            fileSystem = fileSystem,
+            privilegedReader = privilegedReader,
+            privilegedLister = privilegedLister,
+        )
+
+        val result = detector.detectPolicies()
+
+        assertEquals(listOf(0, 7), result.map { it.id })
+        assertEquals(1, privilegedLister.callCount)
+    }
+
+    @Test
+    fun `does not consult privileged lister when normal policy listing succeeds`() {
+        val fileSystem = FakeSysfsFileSystem(
+            directories = listOf("/sys/devices/system/cpu/cpufreq/policy0"),
+            files = mapOf(
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies" to "300000 1228800 2745600",
+                "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq" to "2745600",
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq" to "1228800",
+                "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq" to "300000",
+            ),
+        )
+        val privilegedLister = FakePrivilegedSysfsLister(emptyMap())
+
+        val detector = CpuPolicyDetector(
+            fileSystem = fileSystem,
+            privilegedReader = FakePrivilegedSysfsReader(fileSystem.files),
+            privilegedLister = privilegedLister,
+        )
+
+        val result = detector.detectPolicies()
+
+        assertEquals(listOf(0), result.map { it.id })
+        assertEquals(0, privilegedLister.callCount)
+    }
+
+    @Test
+    fun `reads world-readable policy files before using privileged reader`() {
+        val policyPath = "/sys/devices/system/cpu/cpufreq/policy0"
+        val detector = CpuPolicyDetector(
+            fileSystem = FakeSysfsFileSystem(
+                directories = listOf(policyPath),
+                files = mapOf(
+                    "$policyPath/scaling_available_frequencies" to "300000 1228800 2745600",
+                    "$policyPath/cpuinfo_max_freq" to "2745600",
+                    "$policyPath/scaling_max_freq" to "1228800",
+                    "$policyPath/scaling_min_freq" to "300000",
+                ),
+            ),
+            privilegedReader = FakePrivilegedSysfsReader(emptyMap()),
+        )
+
+        val result = detector.detectPolicies().single()
+
+        assertEquals(0, result.id)
+        assertEquals(1_228_800, result.currentMaxFreq)
+        assertEquals(listOf(300_000, 1_228_800, 2_745_600), result.supportedFrequencies)
+    }
+
+    @Test
+    fun `chmods protected files before falling back to privileged read`() {
+        val policyPath = "/sys/devices/system/cpu/cpufreq/policy0"
+        val protectedFiles = mapOf(
+            "$policyPath/scaling_available_frequencies" to "300000 1228800 2745600",
+            "$policyPath/cpuinfo_max_freq" to "2745600",
+            "$policyPath/scaling_max_freq" to "1228800",
+            "$policyPath/scaling_min_freq" to "300000",
+        )
+        val fileSystem = PermissionChangingSysfsFileSystem(
+            directories = listOf(policyPath),
+            files = protectedFiles,
+        )
+        val privilegedReader = ChmodOnlyPrivilegedSysfsReader(fileSystem)
+        val detector = CpuPolicyDetector(
+            fileSystem = fileSystem,
+            privilegedReader = privilegedReader,
+        )
+
+        val result = detector.detectPolicies().single()
+
+        assertEquals(0, result.id)
+        assertEquals(1_228_800, result.currentMaxFreq)
+        assertEquals(listOf(300_000, 1_228_800, 2_745_600), result.supportedFrequencies)
+        assertTrue(privilegedReader.chmodCalls.isNotEmpty())
+        assertTrue(privilegedReader.readCalls.none { it in protectedFiles.keys })
+    }
+
     private class FakeSysfsFileSystem(
         private val directories: List<String>,
         val files: Map<String, String>,
     ) : SysfsFileSystem {
         override fun listPolicyDirectories(root: String): List<String> = directories
+        override fun readText(path: String): String? = files[path]
     }
 
     private class FakePrivilegedSysfsReader(
         private val files: Map<String, String>,
     ) : PrivilegedSysfsReader {
         override fun readText(path: String): String? = files[path]
+    }
+
+    private class PermissionChangingSysfsFileSystem(
+        private val directories: List<String>,
+        private val files: Map<String, String>,
+    ) : SysfsFileSystem {
+        private val readablePaths = mutableSetOf<String>()
+
+        override fun listPolicyDirectories(root: String): List<String> = directories
+
+        override fun readText(path: String): String? {
+            return files[path]?.takeIf { path in readablePaths }
+        }
+
+        fun makeReadable(path: String): Boolean {
+            return if (path in files) {
+                readablePaths += path
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private class ChmodOnlyPrivilegedSysfsReader(
+        private val fileSystem: PermissionChangingSysfsFileSystem,
+    ) : PrivilegedSysfsReader {
+        val chmodCalls = mutableListOf<String>()
+        val readCalls = mutableListOf<String>()
+
+        override fun readText(path: String): String? {
+            readCalls += path
+            return null
+        }
+
+        override fun makeReadable(path: String): Boolean {
+            chmodCalls += path
+            return fileSystem.makeReadable(path)
+        }
+    }
+
+    private class FakePrivilegedSysfsLister(
+        private val listings: Map<Pair<String, String>, List<String>>,
+    ) : PrivilegedSysfsLister {
+        var callCount = 0
+            private set
+
+        override fun listChildrenWithPrefix(directoryPath: String, prefix: String): List<String>? {
+            callCount += 1
+            return listings[directoryPath to prefix]
+        }
     }
 }

@@ -4,15 +4,28 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
+import com.aure.clustertune.model.DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MAX_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MIN_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.TileInteractionBehavior
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.settingsDataStore by preferencesDataStore(name = "android_tuner_settings")
+
+private val bundledAccentColors = setOf(
+    0xFF3F51B5.toInt(),
+    0xFF006E1C.toInt(),
+    0xFFB3261E.toInt(),
+    0xFF8E24AA.toInt(),
+    0xFF00639A.toInt(),
+    0xFF9A4600.toInt(),
+)
 
 class SettingsStorage(private val context: Context) {
 
@@ -24,7 +37,15 @@ class SettingsStorage(private val context: Context) {
     private val quickSettingsTileAddedKey = booleanPreferencesKey("quick_settings_tile_added")
     private val colorSourceKey = stringPreferencesKey("color_source")
     private val accentColorKey = intPreferencesKey("accent_color")
-    private val odinHandoffTutorialSeenKey = booleanPreferencesKey("odin_handoff_tutorial_seen")
+    private val customAccentColorKey = intPreferencesKey("custom_accent_color")
+    private val automaticUpdateChecksEnabledKey = booleanPreferencesKey("automatic_update_checks_enabled")
+    private val updateCheckIntervalDaysKey = intPreferencesKey("update_check_interval_days")
+    private val includePrereleaseUpdatesKey = booleanPreferencesKey("include_prerelease_updates")
+    private val lastUpdateCheckMillisKey = longPreferencesKey("last_update_check_millis")
+    private val displayFrequenciesAsPercentKey = booleanPreferencesKey("display_frequencies_as_percent")
+    private val profileSwitchToastsEnabledKey = booleanPreferencesKey("profile_switch_toasts_enabled")
+    private val profileSwitchHistoryLimitKey = intPreferencesKey("profile_switch_history_limit")
+    private val privilegedExecutionMethodIdKey = stringPreferencesKey("privileged_execution_method_id")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
         AppSettings(
@@ -32,6 +53,9 @@ class SettingsStorage(private val context: Context) {
                 ?.let(::parseColorSource)
                 ?: AppColorSource.SYSTEM,
             accentColor = preferences[accentColorKey] ?: 0xFF3F51B5.toInt(),
+            customAccentColor = preferences[customAccentColorKey]
+                ?: preferences[accentColorKey]?.takeIf { accentColor -> accentColor !in bundledAccentColors }
+                ?: 0xFF3F51B5.toInt(),
             tileTapBehavior = preferences[tileTapBehaviorKey]
                 ?.let(::parseBehavior)
                 ?: TileInteractionBehavior.SHOW_DIALOG,
@@ -40,7 +64,16 @@ class SettingsStorage(private val context: Context) {
             sleepProfileId = preferences[sleepProfileIdKey],
             hasPromptedQuickSettingsTile = preferences[quickSettingsTilePromptShownKey] ?: false,
             isQuickSettingsTileAdded = preferences[quickSettingsTileAddedKey] ?: false,
-            hasSeenOdinHandoffTutorial = preferences[odinHandoffTutorialSeenKey] ?: false,
+            automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
+            updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
+            includePrereleaseUpdates = preferences[includePrereleaseUpdatesKey] ?: false,
+            lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
+            displayFrequenciesAsPercent = preferences[displayFrequenciesAsPercentKey] ?: false,
+            profileSwitchToastsEnabled = preferences[profileSwitchToastsEnabledKey] ?: true,
+            profileSwitchHistoryLimit = (preferences[profileSwitchHistoryLimitKey]
+                ?: DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT)
+                .coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT),
+            privilegedExecutionMethodId = preferences[privilegedExecutionMethodIdKey],
         )
     }
 
@@ -107,9 +140,63 @@ class SettingsStorage(private val context: Context) {
         }
     }
 
-    suspend fun persistOdinHandoffTutorialSeen() {
+    suspend fun persistCustomAccentColor(accentColor: Int) {
         context.settingsDataStore.edit { preferences ->
-            preferences[odinHandoffTutorialSeenKey] = true
+            preferences[accentColorKey] = accentColor
+            preferences[customAccentColorKey] = accentColor
+        }
+    }
+
+    suspend fun persistAutomaticUpdateChecksEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[automaticUpdateChecksEnabledKey] = enabled
+        }
+    }
+
+    suspend fun persistUpdateCheckIntervalDays(days: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[updateCheckIntervalDaysKey] = days.coerceIn(1, 365)
+        }
+    }
+
+    suspend fun persistIncludePrereleaseUpdates(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[includePrereleaseUpdatesKey] = enabled
+        }
+    }
+
+    suspend fun persistLastUpdateCheckMillis(timestampMillis: Long) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[lastUpdateCheckMillisKey] = timestampMillis
+        }
+    }
+
+    suspend fun persistDisplayFrequenciesAsPercent(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[displayFrequenciesAsPercentKey] = enabled
+        }
+    }
+
+    suspend fun persistProfileSwitchToastsEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[profileSwitchToastsEnabledKey] = enabled
+        }
+    }
+
+    suspend fun persistProfileSwitchHistoryLimit(limit: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[profileSwitchHistoryLimitKey] =
+                limit.coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT)
+        }
+    }
+
+    suspend fun persistPrivilegedExecutionMethodId(methodId: String?) {
+        context.settingsDataStore.edit { preferences ->
+            if (methodId == null) {
+                preferences.remove(privilegedExecutionMethodIdKey)
+            } else {
+                preferences[privilegedExecutionMethodIdKey] = methodId
+            }
         }
     }
 

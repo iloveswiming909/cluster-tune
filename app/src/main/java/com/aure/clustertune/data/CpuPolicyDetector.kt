@@ -1,15 +1,18 @@
 package com.aure.clustertune.data
 
 import com.aure.clustertune.model.CpuPolicyInfo
-import java.io.File
 
 class CpuPolicyDetector(
     private val fileSystem: SysfsFileSystem = RealSysfsFileSystem(),
     private val privilegedReader: PrivilegedSysfsReader,
+    private val privilegedLister: PrivilegedSysfsLister? = null,
     private val policyRoot: String = "/sys/devices/system/cpu/cpufreq",
 ) {
     fun detectPolicies(): List<CpuPolicyInfo> {
-        val directories = fileSystem.listPolicyDirectories(policyRoot)
+        val unprivilegedDirectories = fileSystem.listPolicyDirectories(policyRoot)
+        val directories = unprivilegedDirectories.ifEmpty {
+            privilegedLister?.listChildrenWithPrefix(policyRoot, "policy").orEmpty()
+        }
         return directories
             .sortedBy(::policyIdOrMax)
             .mapNotNull(::parsePolicy)
@@ -104,10 +107,14 @@ class CpuPolicyDetector(
     }
 
     private fun readText(path: String): String? {
-        val direct = runCatching {
-            File(path).readText().trim().takeIf { it.isNotEmpty() }
-        }.getOrNull()
+        val direct = fileSystem.readText(path)?.trim()?.takeIf { it.isNotEmpty() }
         if (direct != null) return direct
+
+        if (privilegedReader.makeReadable(path)) {
+            val afterChmod = fileSystem.readText(path)?.trim()?.takeIf { it.isNotEmpty() }
+            if (afterChmod != null) return afterChmod
+        }
+
         return privilegedReader
             .readText(path)
             ?.trim()

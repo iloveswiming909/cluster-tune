@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.aure.clustertune.AppContainer
+import com.aure.clustertune.apps.AppProfileMonitorService
 import com.aure.clustertune.sleep.SleepProfileMonitorService
 import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +17,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         when (intent?.action) {
             Intent.ACTION_BOOT_COMPLETED -> handleBootCompleted(context)
-            Intent.ACTION_MY_PACKAGE_REPLACED -> QuickSettingsTileRefresher.requestUpdate(context)
+            Intent.ACTION_MY_PACKAGE_REPLACED -> handlePackageReplaced(context)
         }
     }
 
@@ -29,11 +30,33 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 if (settings.sleepProfileEnabled) {
                     SleepProfileMonitorService.start(context)
                 }
+                if (container.repository.observeState().first().appProfileAssignments.isNotEmpty() &&
+                    AppProfileMonitorService.hasUsageStatsPermission(context)
+                ) {
+                    AppProfileMonitorService.start(context)
+                }
                 if (!settings.applyLastProfileOnBoot) {
                     return@launch
                 }
                 container.repository.applyPersistedLastValuesOnBoot()
                 QuickSettingsTileRefresher.requestUpdate(context)
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    private fun handlePackageReplaced(context: Context) {
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                QuickSettingsTileRefresher.requestUpdate(context)
+                val container = AppContainer(context)
+                if (container.repository.observeState().first().appProfileAssignments.isNotEmpty() &&
+                    AppProfileMonitorService.hasUsageStatsPermission(context)
+                ) {
+                    AppProfileMonitorService.start(context)
+                }
             } finally {
                 pendingResult.finish()
             }

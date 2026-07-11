@@ -4,13 +4,15 @@ import android.content.Context
 import com.aure.clustertune.data.PrivilegedSysfsReader
 
 class PServerSysfsReader(
-    private val context: Context,
+    context: Context,
+    private val executionResolver: PrivilegedExecutionResolver = PrivilegedExecutionResolver.default(context),
 ) : PrivilegedSysfsReader {
 
     override fun readText(path: String): String? {
-        val escapedPath = path.replace("'", "'\\''")
-        return RootSupport.runRootCommand(
-            command = "cat '$escapedPath' 2>/dev/null",
-        )?.trim()?.takeIf { it.isNotEmpty() }
+        return executionResolver.readText(path)
+    }
+
+    override fun makeReadable(path: String): Boolean {
+        return executionResolver.makeReadable(path)
     }
 }

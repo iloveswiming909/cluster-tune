@@ -1,7 +1,12 @@
 package com.aure.clustertune.data
 
 import com.aure.clustertune.model.CpuPolicyInfo
+import com.aure.clustertune.model.AppProfileAssignment
+import com.aure.clustertune.model.DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MAX_PROFILE_SWITCH_HISTORY_LIMIT
+import com.aure.clustertune.model.MIN_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.PerformanceProfile
+import com.aure.clustertune.model.ProfileSwitchHistoryEntry
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
 import com.aure.clustertune.model.TunerState
@@ -23,6 +28,8 @@ private data class StorageState(
     val deletedBundledProfileIds: Set<String>,
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
+    val appProfileAssignments: List<AppProfileAssignment>,
+    val profileSwitchHistory: List<ProfileSwitchHistoryEntry>,
     val selectedProfileId: String?,
     val lastAppliedDisplayProfileId: String?,
 )
@@ -32,12 +39,20 @@ private data class PartialStorageState(
     val deletedBundledProfileIds: Set<String>,
     val displayOrder: List<String>,
     val lastValues: Map<Int, Int>,
+    val appProfileAssignments: List<AppProfileAssignment>,
+    val profileSwitchHistory: List<ProfileSwitchHistoryEntry>,
+)
+
+internal data class ImportedProfileMerge(
+    val profiles: List<PerformanceProfile>,
+    val restoredBundledProfileIds: Set<String>,
 )
 
 class PerformanceRepository(
     private val detector: CpuPolicyDetector,
     private val bundledProfileProvider: BundledProfileProvider,
     private val profileStorage: ProfileStorage,
+    private val settingsStorage: SettingsStorage,
     private val commandBuilder: PerformanceCommandBuilder,
     private val rootCommandRunner: RootCommandRunner,
 ) {
@@ -50,32 +65,33 @@ class PerformanceRepository(
         val actualValues: Map<Int, Int>,
         val verificationPassed: Boolean,
         val commandOutput: String?,
-        /**
-         * The exact apply script that was sent to the root channel.
-         * Retained so the UI can hand it off to an alternative root
-         * mechanism (e.g. Odin Settings' "Run script as root") when
-         * verification fails on devices where the standard PServer
-         * channel does not actually land the writes.
-         */
-        val appliedScript: String,
     )
 
     private val liveRefreshToken = MutableStateFlow(0)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeState(): Flow<TunerState> {
-        val storageState = combine(
+        val storageBaseState = combine(
             profileStorage.profiles,
             profileStorage.deletedBundledProfileIds,
             profileStorage.displayOrder,
             profileStorage.lastValues,
-        ) { storedProfiles, deletedBundledProfileIds, displayOrder, lastValues ->
+            profileStorage.appProfileAssignments,
+        ) { storedProfiles, deletedBundledProfileIds, displayOrder, lastValues, appProfileAssignments ->
             PartialStorageState(
                 storedProfiles = storedProfiles,
                 deletedBundledProfileIds = deletedBundledProfileIds,
                 displayOrder = displayOrder,
                 lastValues = lastValues,
+                appProfileAssignments = appProfileAssignments,
+                profileSwitchHistory = emptyList(),
             )
+        }
+        val storageState = combine(
+            storageBaseState,
+            profileStorage.profileSwitchHistory,
+        ) { storage, profileSwitchHistory ->
+            storage.copy(profileSwitchHistory = profileSwitchHistory)
         }
         val completeStorageState = combine(
             storageState,
@@ -87,6 +103,8 @@ class PerformanceRepository(
                 deletedBundledProfileIds = partial.deletedBundledProfileIds,
                 displayOrder = partial.displayOrder,
                 lastValues = partial.lastValues,
+                appProfileAssignments = partial.appProfileAssignments,
+                profileSwitchHistory = partial.profileSwitchHistory,
                 selectedProfileId = selectedProfileId,
                 lastAppliedDisplayProfileId = lastAppliedDisplayProfileId,
             )
@@ -146,6 +164,7 @@ class PerformanceRepository(
                         TunerState(
                             isLoading = false,
                             isPServerAvailable = rootCommandRunner.isAvailable,
+                            privilegedExecutionMethodId = rootCommandRunner.selectedExecutionMethodId,
                             policies = policies,
                             actualValues = actualValues,
                             currentValues = mergeValues(policies, defaultValues, storage.lastValues),
@@ -160,6 +179,10 @@ class PerformanceRepository(
                                 stockProfile = stockProfile,
                                 orderedIds = storage.displayOrder,
                             ),
+                            appProfileAssignments = storage.appProfileAssignments.filter { assignment ->
+                                orderedRealProfiles.any { profile -> profile.id == assignment.profileId }
+                            },
+                            profileSwitchHistory = storage.profileSwitchHistory,
                         ),
                     ),
                 )
@@ -191,53 +214,25 @@ class PerformanceRepository(
     ): Result<ApplyOutcome> {
         val filtered = selectedValues.filterKeys { policyId -> policies.any { it.id == policyId } }
         val script = commandBuilder.buildApplyScript(policies, filtered, isReset)
-
-        // The script execution may legitimately throw on devices where
-        // the PServer channel is unreliable (e.g. Odin 2 Mini). To let
-        // the UI offer the script-handoff fallback in those cases we
-        // catch the failure here and return a non-throwing ApplyOutcome
-        // with verificationPassed=false, so the caller can act on the
-        // failure WITH the script in hand instead of having to
-        // regenerate it.
-        val executionResult = rootCommandRunner.executeScript(script)
-        val commandOutput = executionResult.getOrNull()
-        if (executionResult.isFailure) {
-            val actualValues = detector.readCurrentMaxValues(policies)
-            return Result.success(
-                ApplyOutcome(
-                    actualValues = actualValues,
-                    verificationPassed = false,
-                    commandOutput = executionResult.exceptionOrNull()
-                        ?.let { "channel error: ${it.javaClass.simpleName}: ${it.message}" },
-                    appliedScript = script,
-                )
-            )
-        }
-        return runCatching {
+        return rootCommandRunner.executeScript(script).mapCatching { output ->
             if (persistNormalState) {
                 profileStorage.persistLastValues(filtered)
                 profileStorage.persistLastAppliedDisplayProfile(appliedDisplayProfileId)
             }
             val actualValues = detector.readCurrentMaxValues(policies)
             refreshLiveValues()
-            val verificationPassed = filtered.all { (policyId, requestedValue) ->
-                val policy = policies.firstOrNull { it.id == policyId } ?: return@all false
-                val actualValue = actualValues[policyId] ?: return@all false
-                ProfileStateResolver.isPolicyValueSatisfied(
-                    policy = policy,
-                    requestedValue = requestedValue,
-                    actualValue = actualValue,
-                )
-            }
-            android.util.Log.d(
-                "ClusterTuneApply",
-                "verification: passed=$verificationPassed requested=$filtered actual=$actualValues",
-            )
             ApplyOutcome(
                 actualValues = actualValues,
-                verificationPassed = verificationPassed,
-                commandOutput = commandOutput,
-                appliedScript = script,
+                verificationPassed = filtered.all { (policyId, requestedValue) ->
+                    val policy = policies.firstOrNull { it.id == policyId } ?: return@all false
+                    val actualValue = actualValues[policyId] ?: return@all false
+                    ProfileStateResolver.isPolicyValueSatisfied(
+                        policy = policy,
+                        requestedValue = requestedValue,
+                        actualValue = actualValue,
+                    )
+                },
+                commandOutput = output,
             )
         }
     }
@@ -257,13 +252,21 @@ class PerformanceRepository(
             values = currentValues,
             profileId = state.activeDisplayProfileId ?: state.lastAppliedDisplayProfileId,
         )
-        return applyValuesInternal(
+        val result = applyValuesInternal(
             policies = state.policies,
             selectedValues = sleepProfile.maxFrequencies,
             isReset = sleepProfile.id == ProfileStateResolver.STOCK_PROFILE_ID,
             appliedDisplayProfileId = sleepProfile.id,
             persistNormalState = false,
         )
+        if (result.isSuccess) {
+            logProfileSwitch(
+                profileId = sleepProfile.id,
+                profileName = sleepProfile.name,
+                trigger = "Device sleep",
+            )
+        }
+        return result
     }
 
     suspend fun restorePreSleepState(): Result<ApplyOutcome> {
@@ -285,7 +288,15 @@ class PerformanceRepository(
         if (filteredValues.isEmpty()) {
             return Result.failure(IllegalStateException("No stored values match detected policies"))
         }
-        return applyValuesInternal(
+        val restoreProfileName = when (restoreProfileId) {
+            ProfileStateResolver.STOCK_PROFILE_ID -> "Stock"
+            null,
+            ProfileStateResolver.MANUAL_PROFILE_ID -> "Manual"
+            else -> observeState().first().displayProfiles.firstOrNull { profile ->
+                profile.id == restoreProfileId
+            }?.name ?: "Previous profile"
+        }
+        val result = applyValuesInternal(
             policies = policies,
             selectedValues = filteredValues,
             isReset = restoreProfileId == ProfileStateResolver.STOCK_PROFILE_ID,
@@ -299,6 +310,14 @@ class PerformanceRepository(
             )
             profileStorage.clearSleepRestoreState()
         }
+        if (result.isSuccess) {
+            logProfileSwitch(
+                profileId = restoreProfileId ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+                profileName = restoreProfileName,
+                trigger = "Device wake",
+            )
+        }
+        return result
     }
 
     suspend fun applyPersistedLastValuesOnBoot(): Result<ApplyOutcome> {
@@ -361,6 +380,11 @@ class PerformanceRepository(
             appliedDisplayProfileId = nextProfile.id,
         ).map {
             selectProfile(nextProfile.id.takeUnless { id -> id == ProfileStateResolver.STOCK_PROFILE_ID })
+            logProfileSwitch(
+                profileId = nextProfile.id,
+                profileName = nextProfile.name,
+                trigger = "Quick Settings tile",
+            )
             nextProfile
         }
     }
@@ -398,9 +422,7 @@ class PerformanceRepository(
         val state = observeState().first()
         val policyIds = state.policies.associateBy { it.id }
         val currentProfiles = state.displayProfiles.filter { it.source != ProfileSource.VIRTUAL }
-        val bundledProfilesById = currentProfiles
-            .filter { it.source == ProfileSource.BUNDLED }
-            .associateBy { it.id }
+        val defaultBundledProfiles = bundledProfileProvider.createProfiles(state.policies)
         val validProfiles = ProfileJsonCodec.parseShareProfiles(rawJson)
             .filter { profile ->
                 profile.maxFrequencies.isNotEmpty() &&
@@ -410,31 +432,16 @@ class PerformanceRepository(
                     }
             }
 
-        var createdUserProfiles = 0
-        validProfiles.forEach { importedProfile ->
-            val bundledProfile = bundledProfilesById[importedProfile.id]
-            if (bundledProfile != null) {
-                profileStorage.unmarkBundledProfileDeleted(bundledProfile.id)
-                profileStorage.saveProfile(
-                    bundledProfile.copy(
-                        name = importedProfile.name,
-                        maxFrequencies = importedProfile.maxFrequencies,
-                        isEditable = true,
-                        isDeletable = true,
-                    ),
-                )
-            } else {
-                profileStorage.saveProfile(
-                    importedProfile.copy(
-                        id = "user_${UUID.randomUUID()}",
-                        source = ProfileSource.USER,
-                        order = currentProfiles.size + createdUserProfiles,
-                        isEditable = true,
-                        isDeletable = true,
-                    ),
-                )
-                createdUserProfiles += 1
-            }
+        val merge = mergeImportedProfiles(
+            currentProfiles = currentProfiles,
+            defaultBundledProfiles = defaultBundledProfiles,
+            importedProfiles = validProfiles,
+        )
+        merge.restoredBundledProfileIds.forEach { bundledProfileId ->
+            profileStorage.unmarkBundledProfileDeleted(bundledProfileId)
+        }
+        merge.profiles.forEach { profile ->
+            profileStorage.saveProfile(profile)
         }
         return validProfiles.size
     }
@@ -463,6 +470,82 @@ class PerformanceRepository(
         if (profileStorage.selectedProfileId.first() == profileId) {
             profileStorage.persistSelectedProfile(null)
         }
+    }
+
+    suspend fun saveAppProfileAssignment(assignment: AppProfileAssignment) {
+        val state = observeState().first()
+        val profile = state.displayProfiles.firstOrNull { it.id == assignment.profileId } ?: return
+        profileStorage.saveAppProfileAssignment(
+            assignment.copy(
+                appLabel = assignment.appLabel.ifBlank { assignment.packageName },
+                profileId = profile.id,
+            ),
+        )
+    }
+
+    suspend fun deleteAppProfileAssignment(packageName: String) {
+        profileStorage.deleteAppProfileAssignment(packageName)
+    }
+
+    suspend fun applyProfileTemporarily(profileId: String): Result<ApplyOutcome> {
+        val state = observeState().first()
+        if (!state.isPServerAvailable || state.policies.isEmpty()) {
+            return Result.failure(IllegalStateException("Profile automation is unavailable"))
+        }
+        val profile = state.displayProfiles.firstOrNull { it.id == profileId }
+            ?: return Result.failure(IllegalStateException("App profile is unavailable"))
+        return applyValuesInternal(
+            policies = state.policies,
+            selectedValues = profile.maxFrequencies,
+            isReset = profile.id == ProfileStateResolver.STOCK_PROFILE_ID,
+            appliedDisplayProfileId = profile.id,
+            persistNormalState = false,
+        )
+    }
+
+    suspend fun restoreNormalProfileTemporarily(): Result<ApplyOutcome> {
+        val state = observeState().first()
+        if (!state.isPServerAvailable || state.policies.isEmpty()) {
+            return Result.failure(IllegalStateException("Profile automation is unavailable"))
+        }
+        val restoreProfileId = profileStorage.lastAppliedDisplayProfileId.first()
+        val restoreProfile = restoreProfileId?.let { id ->
+            state.displayProfiles.firstOrNull { it.id == id }
+        }
+        val restoreValues = restoreProfile?.maxFrequencies
+            ?: profileStorage.lastValues.first().takeIf { it.isNotEmpty() }
+            ?: return Result.failure(IllegalStateException("No previous profile to restore"))
+        return applyValuesInternal(
+            policies = state.policies,
+            selectedValues = restoreValues,
+            isReset = restoreProfileId == ProfileStateResolver.STOCK_PROFILE_ID,
+            appliedDisplayProfileId = restoreProfileId,
+            persistNormalState = false,
+        )
+    }
+
+    suspend fun logProfileSwitch(profileId: String?, profileName: String, trigger: String) {
+        val limit = settingsStorage.settings.first().profileSwitchHistoryLimit
+            .coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT)
+        profileStorage.appendProfileSwitchHistory(
+            ProfileSwitchHistoryEntry(
+                timestampMillis = System.currentTimeMillis(),
+                profileId = profileId,
+                profileName = profileName,
+                trigger = trigger,
+            ),
+            limit = limit,
+        )
+    }
+
+    suspend fun trimProfileSwitchHistory(limit: Int = DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT) {
+        profileStorage.trimProfileSwitchHistory(
+            limit.coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT),
+        )
+    }
+
+    suspend fun clearProfileSwitchHistory() {
+        profileStorage.clearProfileSwitchHistory()
     }
 
     suspend fun moveProfile(profileId: String, offset: Int) {
@@ -530,106 +613,48 @@ class PerformanceRepository(
 
 }
 
-/**
- * Result of merging an imported profile set into the current set.
- *
- * @property profiles the merged profiles to persist.
- * @property restoredBundledProfileIds ids of bundled profiles that the
- *   import re-created or overrode (so callers can clear any
- *   "deleted bundled profile" markers for them).
- */
-data class ImportMergeResult(
-    val profiles: List<PerformanceProfile>,
-    val restoredBundledProfileIds: Set<String>,
-)
-
-/**
- * Pure merge of [importedProfiles] into [currentProfiles].
- *
- * Rules (covered by PerformanceRepositoryImportTest):
- *  - An imported profile whose id matches a current BUNDLED profile
- *    overrides that profile's name and frequencies, keeps
- *    source=BUNDLED and the current profile's order, and is reported
- *    in [ImportMergeResult.restoredBundledProfileIds].
- *  - An imported profile whose id matches a [defaultBundledProfiles]
- *    entry that is not currently present restores that bundled
- *    profile: source=BUNDLED, the default's order, name and
- *    frequencies from the import, and the id is reported as restored.
- *  - An imported profile whose id matches a current USER profile
- *    overrides its name and frequencies, keeping source=USER and the
- *    current profile's order.
- *  - An imported profile with an unknown id is appended as a USER
- *    profile after the current profiles, preserving its id.
- */
-fun mergeImportedProfiles(
+internal fun mergeImportedProfiles(
     currentProfiles: List<PerformanceProfile>,
     defaultBundledProfiles: List<PerformanceProfile>,
     importedProfiles: List<PerformanceProfile>,
-): ImportMergeResult {
+): ImportedProfileMerge {
     val currentById = currentProfiles.associateBy { it.id }
     val defaultBundledById = defaultBundledProfiles.associateBy { it.id }
+    val restoredBundledProfileIds = mutableSetOf<String>()
+    var nextNewProfileOrder = currentProfiles.size
 
-    val merged = currentProfiles.toMutableList()
-    val mergedIndexById = HashMap<String, Int>()
-    merged.forEachIndexed { index, profile -> mergedIndexById[profile.id] = index }
-
-    val restored = mutableSetOf<String>()
-    var appendedCount = 0
-
-    importedProfiles.forEach { imported ->
-        val current = currentById[imported.id]
-        when {
-            current != null && current.source == ProfileSource.BUNDLED -> {
-                val updated = current.copy(
-                    name = imported.name,
-                    maxFrequencies = imported.maxFrequencies,
-                    source = ProfileSource.BUNDLED,
-                    isEditable = true,
-                    isDeletable = true,
-                )
-                merged[mergedIndexById.getValue(imported.id)] = updated
-                restored += imported.id
-            }
-
-            current != null -> {
-                val updated = current.copy(
-                    name = imported.name,
-                    maxFrequencies = imported.maxFrequencies,
-                )
-                merged[mergedIndexById.getValue(imported.id)] = updated
-            }
-
-            defaultBundledById.containsKey(imported.id) -> {
-                val default = defaultBundledById.getValue(imported.id)
-                val restoredProfile = default.copy(
-                    name = imported.name,
-                    maxFrequencies = imported.maxFrequencies,
-                    source = ProfileSource.BUNDLED,
-                    order = default.order,
-                    isEditable = true,
-                    isDeletable = true,
-                )
-                mergedIndexById[imported.id] = merged.size
-                merged += restoredProfile
-                restored += imported.id
-            }
-
-            else -> {
-                val appended = imported.copy(
+    val profiles = importedProfiles.map { importedProfile ->
+        val bundledProfile = defaultBundledById[importedProfile.id]
+        if (bundledProfile != null) {
+            restoredBundledProfileIds += bundledProfile.id
+            val existing = currentById[importedProfile.id] ?: bundledProfile
+            existing.copy(
+                name = importedProfile.name,
+                maxFrequencies = importedProfile.maxFrequencies,
+                source = ProfileSource.BUNDLED,
+                isEditable = true,
+                isDeletable = true,
+            )
+        } else {
+            val existing = currentById[importedProfile.id]
+            existing?.copy(
+                name = importedProfile.name,
+                maxFrequencies = importedProfile.maxFrequencies,
+                source = ProfileSource.USER,
+                isEditable = true,
+                isDeletable = true,
+            )
+                ?: importedProfile.copy(
                     source = ProfileSource.USER,
-                    order = currentProfiles.size + appendedCount,
+                    order = nextNewProfileOrder++,
                     isEditable = true,
                     isDeletable = true,
                 )
-                mergedIndexById[imported.id] = merged.size
-                merged += appended
-                appendedCount += 1
-            }
         }
     }
 
-    return ImportMergeResult(
-        profiles = merged,
-        restoredBundledProfileIds = restored,
+    return ImportedProfileMerge(
+        profiles = profiles,
+        restoredBundledProfileIds = restoredBundledProfileIds,
     )
 }

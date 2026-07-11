@@ -1,6 +1,8 @@
 package com.aure.clustertune.data
 
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.PerformanceProfile
+import com.aure.clustertune.model.ProfileSwitchHistoryEntry
 import com.aure.clustertune.model.ProfileSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -75,6 +77,68 @@ object ProfileStorageCodec {
         return runCatching { json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
     }
 
+    fun encodeAppProfileAssignments(assignments: List<AppProfileAssignment>): String {
+        return json.encodeToString<List<StoredAppProfileAssignment>>(
+            assignments.sortedBy { it.appLabel.lowercase() }.map { assignment ->
+                StoredAppProfileAssignment(
+                    packageName = assignment.packageName,
+                    appLabel = assignment.appLabel,
+                    profileId = assignment.profileId,
+                )
+            },
+        )
+    }
+
+    fun parseAppProfileAssignments(raw: String?): List<AppProfileAssignment> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<StoredAppProfileAssignment>>(raw)
+                .mapNotNull { assignment ->
+                    val packageName = assignment.packageName.trim()
+                    val profileId = assignment.profileId.trim()
+                    if (packageName.isBlank() || profileId.isBlank()) return@mapNotNull null
+                    AppProfileAssignment(
+                        packageName = packageName,
+                        appLabel = assignment.appLabel.ifBlank { packageName },
+                        profileId = profileId,
+                    )
+                }
+                .sortedBy { it.appLabel.lowercase() }
+        }.getOrDefault(emptyList())
+    }
+
+    fun encodeProfileSwitchHistory(entries: List<ProfileSwitchHistoryEntry>): String {
+        return json.encodeToString<List<StoredProfileSwitchHistoryEntry>>(
+            entries.map { entry ->
+                StoredProfileSwitchHistoryEntry(
+                    timestampMillis = entry.timestampMillis,
+                    profileId = entry.profileId,
+                    profileName = entry.profileName,
+                    trigger = entry.trigger,
+                )
+            },
+        )
+    }
+
+    fun parseProfileSwitchHistory(raw: String?): List<ProfileSwitchHistoryEntry> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<StoredProfileSwitchHistoryEntry>>(raw)
+                .mapNotNull { entry ->
+                    val profileName = entry.profileName.trim()
+                    val trigger = entry.trigger.trim()
+                    if (profileName.isBlank() || trigger.isBlank()) return@mapNotNull null
+                    ProfileSwitchHistoryEntry(
+                        timestampMillis = entry.timestampMillis,
+                        profileId = entry.profileId,
+                        profileName = profileName,
+                        trigger = trigger,
+                    )
+                }
+                .sortedByDescending { it.timestampMillis }
+        }.getOrDefault(emptyList())
+    }
+
     private fun parseSource(raw: String): ProfileSource {
         return runCatching { ProfileSource.valueOf(raw) }.getOrDefault(ProfileSource.USER)
     }
@@ -89,5 +153,20 @@ object ProfileStorageCodec {
         val isDeletable: Boolean = true,
         @SerialName("maxFrequencies")
         val maxFrequencies: Map<String, Int> = emptyMap(),
+    )
+
+    @Serializable
+    private data class StoredAppProfileAssignment(
+        val packageName: String,
+        val appLabel: String,
+        val profileId: String,
+    )
+
+    @Serializable
+    private data class StoredProfileSwitchHistoryEntry(
+        val timestampMillis: Long,
+        val profileId: String? = null,
+        val profileName: String,
+        val trigger: String,
     )
 }

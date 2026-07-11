@@ -3,7 +3,6 @@ package com.aure.clustertune
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -11,10 +10,14 @@ import androidx.activity.viewModels
 import androidx.compose.material3.Surface
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import com.aure.clustertune.model.ProfileStateResolver
+import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.TunerState
+import com.aure.clustertune.quicktuner.PerformanceQuickTunerApplyRepository
+import com.aure.clustertune.quicktuner.QuickTunerApplyHandler
 import com.aure.clustertune.tile.QuickSettingsTileRefresher
+import com.aure.clustertune.ui.CompactProfilePickerScreen
 import com.aure.clustertune.ui.CompactTunerScreen
+import com.aure.clustertune.ui.SingleToast
 import com.aure.clustertune.ui.TunerViewModel
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
 import kotlinx.coroutines.launch
@@ -23,11 +26,19 @@ class TileControlActivity : ComponentActivity() {
 
     companion object {
         private const val ACTION_OPEN_DIALOG = "com.aure.clustertune.action.OPEN_TILE_DIALOG"
+        private const val ACTION_OPEN_PROFILE_PICKER = "com.aure.clustertune.action.OPEN_PROFILE_PICKER"
         private const val ACTION_QS_TILE_PREFERENCES = "android.service.quicksettings.action.QS_TILE_PREFERENCES"
 
         fun createDialogIntent(context: Context): Intent {
             return Intent(context, TileControlActivity::class.java).apply {
                 action = ACTION_OPEN_DIALOG
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            }
+        }
+
+        fun createProfilePickerIntent(context: Context): Intent {
+            return Intent(context, TileControlActivity::class.java).apply {
+                action = ACTION_OPEN_PROFILE_PICKER
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
             }
         }
@@ -38,7 +49,8 @@ class TileControlActivity : ComponentActivity() {
         TunerViewModel.factory(
             repository = container.repository,
             settingsStorage = container.settingsStorage,
-            odinScriptHandoff = container.odinScriptHandoff,
+            privilegedExecutionResolver = container.privilegedExecutionResolver,
+            installedAppRepository = container.installedAppRepository,
         )
     }
 
@@ -52,7 +64,11 @@ class TileControlActivity : ComponentActivity() {
             return
         }
 
-        setEditorContent()
+        if (intent?.action == ACTION_OPEN_PROFILE_PICKER) {
+            setProfilePickerContent()
+        } else {
+            setEditorContent()
+        }
     }
 
     private fun setEditorContent() {
@@ -63,6 +79,7 @@ class TileControlActivity : ComponentActivity() {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
                     CompactTunerScreen(
                         state = state,
+                        displayFrequenciesAsPercent = settings.displayFrequenciesAsPercent,
                         onPolicyValueChange = viewModel::setPolicyValue,
                         onApplyProfile = viewModel::applyProfile,
                         onClearSelection = viewModel::clearSelection,
@@ -82,30 +99,42 @@ class TileControlActivity : ComponentActivity() {
 
     private fun applyCurrentFromDialog(state: TunerState) {
         lifecycleScope.launch {
-            val appliedProfile = ProfileStateResolver.preferredProfileForCurrentValues(state)
-            val result = container.repository.applyValues(
-                policies = state.policies,
-                selectedValues = state.currentValues,
-                isReset = appliedProfile?.id == ProfileStateResolver.STOCK_PROFILE_ID,
-                appliedDisplayProfileId = appliedProfile?.id ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+            val handler = QuickTunerApplyHandler(
+                repository = PerformanceQuickTunerApplyRepository(container.repository),
+                showToast = { message, duration -> SingleToast.show(applicationContext, message, duration) },
+                refreshTile = { QuickSettingsTileRefresher.requestUpdate(applicationContext) },
             )
-            result.onSuccess {
-                container.repository.selectProfile(
-                    appliedProfile?.id?.takeUnless { id -> id == ProfileStateResolver.STOCK_PROFILE_ID },
-                )
-                Toast.makeText(
-                    applicationContext,
-                    "Applied ${appliedProfile?.name ?: "Manual"}",
-                    Toast.LENGTH_SHORT,
-                ).show()
+            handler.applyCurrent(state).onSuccess {
                 dismissTileDialog()
-                QuickSettingsTileRefresher.requestUpdate(applicationContext)
-            }.onFailure { throwable ->
-                Toast.makeText(
-                    applicationContext,
-                    throwable.message ?: "Failed to apply limits",
-                    Toast.LENGTH_LONG,
-                ).show()
+            }
+        }
+    }
+
+    private fun setProfilePickerContent() {
+        setContent {
+            val settings = viewModel.settings.collectAsStateWithLifecycle().value
+            ClusterTuneTheme(settings = settings) {
+                Surface {
+                    val state = viewModel.state.collectAsStateWithLifecycle().value
+                    CompactProfilePickerScreen(
+                        state = state,
+                        onApplyProfile = { profile -> applyProfileFromPicker(state, profile) },
+                        onDismissRequest = ::dismissTileDialog,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyProfileFromPicker(state: TunerState, profile: PerformanceProfile) {
+        lifecycleScope.launch {
+            val handler = QuickTunerApplyHandler(
+                repository = PerformanceQuickTunerApplyRepository(container.repository),
+                showToast = { message, duration -> SingleToast.show(applicationContext, message, duration) },
+                refreshTile = { QuickSettingsTileRefresher.requestUpdate(applicationContext) },
+            )
+            handler.applyProfile(state, profile).onSuccess {
+                dismissTileDialog()
             }
         }
     }

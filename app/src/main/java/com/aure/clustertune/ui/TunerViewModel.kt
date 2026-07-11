@@ -3,18 +3,20 @@ package com.aure.clustertune.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import android.util.Log
+import com.aure.clustertune.data.InstalledAppRepository
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.SettingsStorage
-import com.aure.clustertune.root.OdinScriptHandoff
 import com.aure.clustertune.model.AppColorSource
+import com.aure.clustertune.model.AppProfileAssignment
 import com.aure.clustertune.model.AppSettings
 import com.aure.clustertune.model.CpuPolicyInfo
+import com.aure.clustertune.model.InstalledAppInfo
 import com.aure.clustertune.model.PerformanceProfile
 import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.model.ProfileSource
 import com.aure.clustertune.model.TileInteractionBehavior
 import com.aure.clustertune.model.TunerState
+import com.aure.clustertune.root.PrivilegedExecutionResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,29 +28,15 @@ import kotlin.math.abs
 class TunerViewModel(
     private val repository: PerformanceRepository,
     private val settingsStorage: SettingsStorage,
-    private val odinScriptHandoff: OdinScriptHandoff,
+    private val privilegedExecutionResolver: PrivilegedExecutionResolver,
+    private val installedAppRepository: InstalledAppRepository,
 ) : ViewModel() {
-
-    /**
-     * State surfaced to the UI when the standard PServer apply path
-     * failed verification and the device has Odin Settings available
-     * as a fallback. The UI shows a handoff dialog and, if the user
-     * accepts, the user is taken to Odin Settings to run the script
-     * through "Run script as Root".
-     */
-    data class HandoffRequest(
-        val scriptPath: String,
-        val userVisiblePath: String,
-        val showTutorial: Boolean,
-        val profileName: String,
-    )
-
-    private val handoffRequest = MutableStateFlow<HandoffRequest?>(null)
-    val handoffRequestFlow: StateFlow<HandoffRequest?> = handoffRequest
 
     private val edits = MutableStateFlow<Map<Int, Int>>(emptyMap())
     private val transientMessage = MutableStateFlow<String?>(null)
     private val transientError = MutableStateFlow<String?>(null)
+    private val installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
+    private val recentApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
 
     val state: StateFlow<TunerState> = combine(
         repository.observeState(),
@@ -74,6 +62,29 @@ class TunerViewModel(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = AppSettings(),
     )
+
+    val launchableApps: StateFlow<List<InstalledAppInfo>> = installedApps.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
+    val recentActiveApps: StateFlow<List<InstalledAppInfo>> = recentApps.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
+    init {
+        refreshInstalledApps()
+    }
+
+    fun refreshInstalledApps() {
+        viewModelScope.launch {
+            installedApps.value = installedAppRepository.listLaunchableApps()
+            recentApps.value = installedAppRepository.listRecentActiveApps()
+        }
+    }
 
     fun setPolicyValue(policy: CpuPolicyInfo, rawValue: Int) {
         val snapped = snapToSupported(policy, rawValue)
@@ -125,7 +136,6 @@ class TunerViewModel(
 
         viewModelScope.launch {
             val appliedProfile = ProfileStateResolver.preferredProfileForCurrentValues(state)
-            val profileName = appliedProfile?.name ?: "Manual"
             val applyResult = repository.applyValues(
                 policies = state.policies,
                 selectedValues = state.currentValues,
@@ -134,95 +144,26 @@ class TunerViewModel(
             )
             applyResult.onSuccess { outcome ->
                 edits.value = emptyMap()
-                if (outcome.verificationPassed) {
-                    Log.d(LOG_TAG, "applyCurrent: verification passed")
-                    transientMessage.value = buildAppliedMessage(appliedProfile, outcome.commandOutput)
-                    transientError.value = null
+                transientMessage.value = if (outcome.verificationPassed) {
+                    buildAppliedMessage(appliedProfile, outcome.commandOutput)
                 } else {
-                    Log.d(
-                        LOG_TAG,
-                        "applyCurrent: verification failed, handoff available=${odinScriptHandoff.isAvailable}",
-                    )
-                    if (odinScriptHandoff.isAvailable) {
-                        val scriptPath = odinScriptHandoff.writeScript(outcome.appliedScript)
-                        Log.d(LOG_TAG, "applyCurrent: scriptPath=$scriptPath")
-                        if (scriptPath != null) {
-                            val hasSeenTutorial = settings.value.hasSeenOdinHandoffTutorial
-                            handoffRequest.value = HandoffRequest(
-                                scriptPath = scriptPath,
-                                userVisiblePath = odinScriptHandoff.userVisibleScriptPath(),
-                                showTutorial = !hasSeenTutorial,
-                                profileName = profileName,
-                            )
-                            transientMessage.value = null
-                            transientError.value = null
-                        } else {
-                            transientError.value =
-                                "Could not write apply script to Downloads. Check storage permissions."
-                        }
-                    } else {
-                        transientMessage.value =
-                            buildVerificationFailureMessage(state, outcome.actualValues, outcome.commandOutput)
-                        transientError.value = null
-                    }
+                    buildVerificationFailureMessage(state, outcome.actualValues, outcome.commandOutput)
                 }
+                transientError.value = null
             }.onFailure { throwable ->
-                Log.w(LOG_TAG, "applyCurrent: applyValues failed", throwable)
                 transientError.value = throwable.message ?: "Failed to apply limits"
             }
-            if (applyResult.isSuccess && applyResult.getOrNull()?.verificationPassed == true) {
+            if (applyResult.isSuccess) {
                 repository.selectProfile(appliedProfile?.id?.takeUnless { it == ProfileStateResolver.STOCK_PROFILE_ID })
-                onApplied(profileName)
+                repository.logProfileSwitch(
+                    profileId = appliedProfile?.id ?: ProfileStateResolver.MANUAL_PROFILE_ID,
+                    profileName = appliedProfile?.name ?: "Manual",
+                    trigger = "Manual apply from Profiles tab",
+                )
+                onApplied(appliedProfile?.name ?: "Custom values")
             }
         }
     }
-
-    /** User tapped "Open Odin Settings" in the handoff dialog. */
-    fun confirmHandoff() {
-        viewModelScope.launch {
-            settingsStorage.persistOdinHandoffTutorialSeen()
-        }
-        odinScriptHandoff.launchOdinSettings()
-        handoffRequest.value = null
-    }
-
-    /** User cancelled the handoff dialog. */
-    fun dismissHandoff() {
-        viewModelScope.launch {
-            settingsStorage.persistOdinHandoffTutorialSeen()
-        }
-        val previous = handoffRequest.value
-        handoffRequest.value = null
-        if (previous != null) {
-            transientMessage.value = "Apply not completed. Tap a preset and try again."
-        }
-    }
-
-    /** Called from onResume after the user returned from Odin Settings. */
-    fun verifyAfterHandoff() {
-        val current = state.value
-        if (current.policies.isEmpty()) return
-        viewModelScope.launch {
-            repository.refreshLiveValues()
-            val mismatches = current.policies.mapNotNull { policy ->
-                val requested = current.currentValues[policy.id] ?: return@mapNotNull null
-                val actual = current.actualValues[policy.id] ?: return@mapNotNull null
-                if (ProfileStateResolver.isPolicyValueSatisfied(
-                        policy = policy,
-                        requestedValue = requested,
-                        actualValue = actual,
-                    )
-                ) null else policy.id
-            }
-            transientMessage.value = if (mismatches.isEmpty()) {
-                "Underclock applied via Odin Settings"
-            } else {
-                "Apply did not land; check Odin Settings ran the script"
-            }
-        }
-    }
-
-
 
     fun createUserProfile(name: String, state: TunerState) {
         val trimmedName = name.trim()
@@ -262,6 +203,28 @@ class TunerViewModel(
         viewModelScope.launch {
             repository.deleteProfile(profileId)
             transientMessage.value = "Deleted profile"
+            transientError.value = null
+        }
+    }
+
+    fun saveAppProfileAssignment(packageName: String, appLabel: String, profileId: String) {
+        viewModelScope.launch {
+            repository.saveAppProfileAssignment(
+                AppProfileAssignment(
+                    packageName = packageName,
+                    appLabel = appLabel,
+                    profileId = profileId,
+                ),
+            )
+            transientMessage.value = "Saved app profile for $appLabel"
+            transientError.value = null
+        }
+    }
+
+    fun deleteAppProfileAssignment(packageName: String) {
+        viewModelScope.launch {
+            repository.deleteAppProfileAssignment(packageName)
+            transientMessage.value = "Deleted app profile"
             transientError.value = null
         }
     }
@@ -340,6 +303,71 @@ class TunerViewModel(
         }
     }
 
+    fun setCustomAccentColor(accentColor: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistCustomAccentColor(accentColor)
+        }
+    }
+
+    fun setAutomaticUpdateChecksEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistAutomaticUpdateChecksEnabled(enabled)
+        }
+    }
+
+    fun setUpdateCheckIntervalDays(days: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistUpdateCheckIntervalDays(days)
+        }
+    }
+
+    fun setIncludePrereleaseUpdates(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistIncludePrereleaseUpdates(enabled)
+        }
+    }
+
+    fun setDisplayFrequenciesAsPercent(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistDisplayFrequenciesAsPercent(enabled)
+        }
+    }
+
+    fun setProfileSwitchToastsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStorage.persistProfileSwitchToastsEnabled(enabled)
+        }
+    }
+
+    fun setProfileSwitchHistoryLimit(limit: Int) {
+        viewModelScope.launch {
+            settingsStorage.persistProfileSwitchHistoryLimit(limit)
+            repository.trimProfileSwitchHistory(limit)
+        }
+    }
+
+    fun setPrivilegedExecutionMethod(methodId: String?) {
+        viewModelScope.launch {
+            privilegedExecutionResolver.setConfiguredMethodId(methodId)
+            settingsStorage.persistPrivilegedExecutionMethodId(methodId)
+            transientMessage.value = methodId
+                ?.let { "Privileged method set to ${formatExecutionMethod(it)}" }
+                ?: "Privileged method set to automatic"
+            transientError.value = null
+        }
+    }
+
+    fun autoDetectPrivilegedExecutionMethod() {
+        viewModelScope.launch {
+            val methodId = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            settingsStorage.persistPrivilegedExecutionMethodId(methodId)
+            transientMessage.value = methodId
+                ?.let { "Using ${formatExecutionMethod(it)}" }
+                ?: "No privileged execution method is available"
+            transientError.value = null
+        }
+    }
+
     fun refreshLiveState() {
         repository.refreshLiveValues()
     }
@@ -365,12 +393,7 @@ class TunerViewModel(
         appliedProfile: PerformanceProfile?,
         commandOutput: String?,
     ): String {
-        val base = if (appliedProfile != null) {
-            "Applied profile: ${appliedProfile.name}"
-        } else {
-            "Applied profile: Manual"
-        }
-        return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base
+        return appliedProfile?.name ?: "Custom values"
     }
 
     private fun buildVerificationFailureMessage(
@@ -381,25 +404,40 @@ class TunerViewModel(
         val summary = state.policies.joinToString(", ") { policy ->
             val requested = state.currentValues[policy.id] ?: policy.currentMaxFreq
             val actual = actualValues[policy.id] ?: policy.currentMaxFreq
-            "C${policy.id} requested ${formatFrequency(requested)}, " +
-                "actual ${formatFrequency(actual, boosted = actual > policy.selectableMaxFreq)}"
+            "C${policy.id} requested ${formatFrequency(requested, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}, " +
+                "actual ${formatFrequency(actual, boosted = actual > policy.selectableMaxFreq, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}"
         }
         val base = "Apply did not stick: $summary"
         return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base
     }
 
-    companion object {
-        private const val LOG_TAG = "ClusterTuneApply"
+    private fun formatExecutionMethod(methodId: String): String {
+        return when (methodId) {
+            "pserver-stdout" -> "PServer"
+            "pserver-noout" -> "PServer (write-only)"
+            "pserver-file-output" -> "PServer fallback"
+            "root-shell" -> "Root shell"
+            "shizuku" -> "Shizuku"
+            else -> methodId
+        }
+    }
 
+    companion object {
         fun factory(
             repository: PerformanceRepository,
             settingsStorage: SettingsStorage,
-            odinScriptHandoff: OdinScriptHandoff,
+            privilegedExecutionResolver: PrivilegedExecutionResolver,
+            installedAppRepository: InstalledAppRepository,
         ): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TunerViewModel(repository, settingsStorage, odinScriptHandoff) as T
+                    return TunerViewModel(
+                        repository,
+                        settingsStorage,
+                        privilegedExecutionResolver,
+                        installedAppRepository,
+                    ) as T
                 }
             }
         }
