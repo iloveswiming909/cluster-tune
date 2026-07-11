@@ -1,47 +1,45 @@
-ClusterTune BoostFramework probe build (v3 - hidden-API bypass)
-===============================================================
+ClusterTune BoostFramework probe v4
+===================================
 
-STORY SO FAR:
-  - PServer is SELinux-blocked for untrusted_app (hard wall, dead).
-  - vendor.perfservice / android.util.BoostFramework is NOT SELinux-
-    blocked (boost-avc logs were empty).
-  - BUT the class is @hide, so on Android 13 its members are filtered
-    from third-party reflection: declaredConstructors returned 0.
-    That's Android's hidden-API enforcement, NOT SELinux.
+WHERE WE ARE:
+  v3 log was a big step: hidden-API bypass worked, BoostFramework
+  constructed, perfLockAcquire(int,int[]) returned VALID handles
+  (5422+) with NO SELinux denial. But scaling_max_freq didn't move
+  with opcode 0x40804200.
 
-THIS BUILD adds LSPosed's AndroidHiddenApiBypass library and calls
-HiddenApiBypass.addHiddenApiExemptions("L") before reflecting. That
-un-hides the class members so we can construct BoostFramework and call
-perfLockAcquire. Robust on Android 10+.
+  Likely reason: perflock frequency caps are applied in the perf HAL /
+  governor layer and often DON'T write scaling_max_freq. The cap shows
+  up in scaling_CUR_freq under load, not in the static max. OR the
+  opcode is simply wrong for this build.
 
-NEW DEPENDENCY (resolves on GitHub's runners, not locally):
-  org.lsposed.hiddenapibypass:hiddenapibypass:4.3
-Plus a dependenciesInfo{} block in android{} (required by the lib).
+v4 DOES:
+  - Dumps every BoostFramework field that looks like a freq/cluster
+    opcode (FIELD <name> = 0x...), so we can use the device's OWN
+    constants instead of guessing.
+  - Tries a RANGE of candidate opcodes.
+  - After each acquire, reads ALL policies' scaling_max_freq AND
+    scaling_cur_freq, plus cpu_max_freq.
+  - Spins CPU load during measurement so cur_freq is meaningful.
 
-BUILD FILES CHANGED vs the maintainer's 0.3.2 beta:
-  - app/build.gradle.kts  (dep + dependenciesInfo)
-  - app/src/main/java/com/aure/clustertune/root/BoostFrameworkProbe.kt
-  - (plus the earlier pserver-noout WIP, inert on the Mini)
-  Reminder: make sure OdinHandoffDialog.kt is NOT in your fork (it's a
-  0.3.1 leftover that breaks the build). It's absent from this tree.
+HOW TO TEST (same as before):
+    cd C:\platform-tools
+    .\adb logcat -c
+  Open ClusterTune, wait ~15s (it runs several opcode/value combos), then:
+    .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe4.log
+  Upload boost-probe4.log.
 
-HOW TO TEST:
-  1. Build via GitHub Actions.
-  2. Sideload.
-  3. On PC:
-       cd C:\platform-tools
-       .\adb logcat -c
-     Open ClusterTune, wait ~10s, then:
-       .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe3.log
-       .\adb logcat -d | Select-String -Pattern "avc.*perf" | Out-File -Encoding utf8 boost-avc3.log
-  4. Upload both.
+WHAT TO LOOK FOR:
+  - "FIELD ..._MAX_FREQ_CLUSTER_... = 0x...." lines -> the REAL opcodes.
+    Even if nothing moves, these tell us the exact constants to use.
+  - Any line where curUnderLoad for p7 drops well below baseline while
+    a cap is held -> the cap WORKS (just not via scaling_max_freq).
+  - Any change in max[...] or cpu_max -> cap writes a sysnode directly.
 
-WHAT WE'LL LEARN:
-  - "hidden-API exemption added: ..." shows the unlock ran.
-  - "Class ... has N constructor(s)" with N>0 -> unlock worked.
-  - "ctor(...): SUCCESS" + "perfLockAcquire found" -> constructed it.
-  - TRY lines: look for *** CHANGED *** meaning an opcode/value actually
-    moved scaling_max_freq. THAT is the win: a no-root, no-PServer,
-    no-Settings-detour write path.
-  - If constructors still 0 after exemption, we escalate to the lib's
-    explicit HiddenApiBypass.getDeclaredMethods()/newInstance helpers.
+HONEST NOTE: even if this works, a perflock is a TEMPORARY cap (held
+while the lock is alive). Turning it into a persistent underclock needs
+a long-held lock + a background service to re-acquire it. Heavier than
+writing scaling_max_freq, but still no-root / no-Settings-detour. We'll
+weigh that against the Odin Settings handoff once we know it caps.
+
+Reminder: OdinHandoffDialog.kt must NOT be in your fork (0.3.1 leftover
+that breaks the build). Absent from this tree.

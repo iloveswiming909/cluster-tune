@@ -6,203 +6,205 @@ import java.io.File
 import java.lang.reflect.Method
 
 /**
- * Diagnostic probe for Qualcomm's BoostFramework / vendor.perfservice
- * (com.qualcomm.qti.IPerfManager) as an alternative privileged write
- * path on devices where PServer is SELinux-blocked for untrusted_app
- * (e.g. Odin 2 Mini).
+ * Diagnostic probe for Qualcomm BoostFramework / vendor.perfservice as an
+ * alternative privileged CPU-frequency-cap path on the Odin 2 Mini
+ * (PServer is SELinux-blocked; perfservice is not).
  *
- * perfservice runs as the `system` user and can write the cpufreq
- * max-frequency sysnodes. The documented MPCTLV3 opcodes set per-cluster
- * MAX frequency, which is exactly a downward cap:
- *   little (policy0): 0x40804100
- *   big    (policy3): 0x40804000
- *   prime  (policy7): 0x40804200
+ * v4: we can already construct BoostFramework (via hidden-API bypass) and
+ * perfLockAcquire returns valid handles, but scaling_max_freq didn't move
+ * with opcode 0x40804200. This version:
+ *   - Dumps ALL BoostFramework fields whose names look like freq opcodes,
+ *     so we use the device's OWN constants instead of guessing.
+ *   - Tries a range of candidate MAX-freq opcodes.
+ *   - After each acquire, reads a BROAD set of nodes (all policies'
+ *     scaling_max_freq AND scaling_cur_freq, plus cpu_max_freq), because
+ *     perflock caps often apply in the HAL/governor layer and show up in
+ *     cur_freq under load rather than in scaling_max_freq.
+ *   - Spins CPU load during the measurement so cur_freq is meaningful.
  *
- * This probe:
- *  1. Reflectively constructs android.util.BoostFramework.
- *  2. Reads current scaling_max_freq for policy7 via File API.
- *  3. Calls perfLockAcquire with the prime-cluster MAX-freq opcode and a
- *     low target value, trying several value encodings (raw kHz, MHz,
- *     and "level" forms) since the unit varies by release.
- *  4. Re-reads scaling_max_freq and logs whether it moved.
- *
- * All output under logcat tag "ClusterTuneBoost". If a value encoding
- * moves the frequency, we've found a no-root, no-PServer write path.
+ * Tag: "ClusterTuneBoost".
  */
 object BoostFrameworkProbe {
 
     private const val TAG = "ClusterTuneBoost"
 
-    // Documented MPCTLV3 per-cluster MAX-frequency opcodes.
-    private const val OPCODE_MAX_FREQ_LITTLE = 0x40804100 // policy0, CPUs 0-2
-    private const val OPCODE_MAX_FREQ_BIG = 0x40804000    // policy3, CPUs 3-6
-    private const val OPCODE_MAX_FREQ_PRIME = 0x40804200  // policy7, CPU 7
-
-    private const val PRIME_PATH = "/sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq"
+    private val POLICIES = listOf(0, 3, 7)
+    private fun maxPath(p: Int) = "/sys/devices/system/cpu/cpufreq/policy$p/scaling_max_freq"
+    private fun curPath(p: Int) = "/sys/devices/system/cpu/cpufreq/policy$p/scaling_cur_freq"
+    private const val CPU_MAX_FREQ = "/sys/kernel/msm_performance/parameters/cpu_max_freq"
 
     fun run(context: Context) {
-        Log.d(TAG, "===== BoostFramework probe begin =====")
+        Log.d(TAG, "===== BoostFramework probe v4 begin =====")
 
-        // Unlock hidden-API reflection: android.util.BoostFramework is a
-        // @hide class, so on Android 13 its members are filtered from
-        // third-party reflection (declaredConstructors returns empty).
-        // This exemption makes them visible again. Robust on Android 10+.
         val exempted = runCatching {
             org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("L")
         }
-        Log.d(TAG, "hidden-API exemption added: ${exempted.getOrNull() ?: exempted.exceptionOrNull()?.message}")
+        Log.d(TAG, "hidden-API exemption: ${exempted.getOrNull() ?: exempted.exceptionOrNull()?.message}")
 
         val framework = tryConstructBoostFramework(context)
         if (framework == null) {
-            Log.d(TAG, "Could not construct BoostFramework - class missing or blocked. STOP.")
-            Log.d(TAG, "===== BoostFramework probe end =====")
+            Log.d(TAG, "Could not construct BoostFramework. STOP.")
+            Log.d(TAG, "===== probe end =====")
             return
         }
-        Log.d(TAG, "BoostFramework constructed OK: ${framework.javaClass.name}")
+        Log.d(TAG, "BoostFramework OK: ${framework.javaClass.name}")
 
-        val acquire = findPerfLockAcquire(framework)
-        val release = findPerfLockRelease(framework)
-        if (acquire == null) {
-            Log.d(TAG, "perfLockAcquire method not found. STOP.")
-            Log.d(TAG, "===== BoostFramework probe end =====")
+        // Dump fields that look like frequency/cluster opcodes so we can
+        // use the device's real constants.
+        dumpFreqOpcodeFields(framework.javaClass)
+
+        val acquire = findPerfLockAcquire(framework) ?: run {
+            Log.d(TAG, "perfLockAcquire not found. STOP.")
+            Log.d(TAG, "===== probe end =====")
             return
         }
-        Log.d(TAG, "perfLockAcquire found: $acquire")
+        val release = findMethod(framework, "perfLockRelease")
 
-        val before = readFreq()
-        Log.d(TAG, "policy7 scaling_max_freq BEFORE = $before")
-
-        // The target value unit is unknown; try several encodings for a
-        // ~2.0 GHz cap on the prime core. After each, read back and log.
-        val candidates = listOf(
-            "raw-kHz-2016000" to 2016000,
-            "MHz-2016" to 2016,
-            "raw-kHz-1958400" to 1958400,
-            "level-0xFFF-min? " to 0x0,      // 0 sometimes = lowest level
-            "value-20 (level)" to 20,
+        // Candidate opcodes for per-cluster MAX frequency. First the ones
+        // discovered from fields (if any), then documented guesses.
+        val discovered = discoverMaxFreqOpcodes(framework.javaClass)
+        val guesses = listOf(
+            0x40804200, // plus/prime (our earlier guess)
+            0x40804000, // big
+            0x40800000, // base max-freq family
+            0x41000000,
+            0x40C00000,
+            0x42C20000,
         )
+        val opcodes = (discovered + guesses).distinct()
+        Log.d(TAG, "Testing ${opcodes.size} candidate opcode(s): ${opcodes.joinToString { "0x" + it.toString(16) }}")
 
-        for ((label, value) in candidates) {
-            try {
-                // perfLockAcquire(duration_ms, int... args)
-                // args = pairs of (opcode, value). Hold for 8s so we can
-                // observe the effect before it releases.
-                val args = intArrayOf(OPCODE_MAX_FREQ_PRIME, value)
-                val handle = invokeAcquire(acquire, framework, 8000, args)
-                Thread.sleep(300)
-                val after = readFreq()
-                Log.d(TAG, "TRY $label: opcode=0x${OPCODE_MAX_FREQ_PRIME.toString(16)} value=$value -> handle=$handle, scaling_max_freq AFTER = $after ${if (after != before) "*** CHANGED ***" else "(no change)"}")
-                // Release before next attempt if we got a handle
-                if (release != null && handle is Int && handle > 0) {
-                    runCatching { release.invoke(framework, handle) }
-                }
-                Thread.sleep(200)
-            } catch (t: Throwable) {
-                Log.d(TAG, "TRY $label threw: ${t.javaClass.simpleName}: ${t.message}")
+        logNodes("BASELINE")
+
+        // Target ~1.5 GHz on prime; try kHz and a few index-like values.
+        val values = listOf(1497600, 1500000, 1478400, 10, 5)
+
+        for (opcode in opcodes) {
+            for (value in values) {
+                testOne(acquire, release, framework, opcode, value)
             }
         }
 
-        val finalVal = readFreq()
-        Log.d(TAG, "policy7 scaling_max_freq FINAL = $finalVal (started at $before)")
-        Log.d(TAG, "===== BoostFramework probe end =====")
+        logNodes("FINAL")
+        Log.d(TAG, "===== probe end =====")
+    }
+
+    private fun testOne(acquire: Method, release: Method?, framework: Any, opcode: Int, value: Int) {
+        try {
+            val args = intArrayOf(opcode, value)
+            val handle = acquire.invoke(framework, 12000, args)
+            // Spin some load so scaling_cur_freq rises toward the cap if
+            // uncapped, or is held down if the cap works.
+            val loadFreqs = spinAndSampleCur()
+            val maxNow = POLICIES.joinToString(" ") { "p$it=${read(maxPath(it))}" }
+            val cpuMax = read(CPU_MAX_FREQ)
+            Log.d(
+                TAG,
+                "OP 0x${opcode.toString(16)} v=$value handle=$handle | max[$maxNow] cpu_max=$cpuMax | curUnderLoad=${loadFreqs.joinToString(",") { "p${it.policy}:${it.value}" }}",
+            )
+            if (release != null && handle is Int && handle > 0) {
+                runCatching { release.invoke(framework, handle) }
+            }
+            Thread.sleep(120)
+        } catch (t: Throwable) {
+            Log.d(TAG, "OP 0x${opcode.toString(16)} v=$value threw ${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
+    private data class CurSample(val policy: Int, val value: String, val baseline: String)
+
+    private fun spinAndSampleCur(): List<CurSample> {
+        // Record baseline cur, then spin ~200ms of load, then sample cur.
+        val baseline = POLICIES.associateWith { read(curPath(it)) }
+        val end = System.currentTimeMillis() + 200
+        var x = 0.0
+        while (System.currentTimeMillis() < end) {
+            x += Math.sqrt((x + 1.0)) * 1.0000001
+        }
+        // touch x so JIT doesn't elide the loop
+        if (x < 0) Log.d(TAG, "unreachable $x")
+        return POLICIES.map { CurSample(it, read(curPath(it)), baseline[it] ?: "?") }
+    }
+
+    private fun logNodes(label: String) {
+        val maxs = POLICIES.joinToString(" ") { "p$it=${read(maxPath(it))}" }
+        val curs = POLICIES.joinToString(" ") { "p$it=${read(curPath(it))}" }
+        Log.d(TAG, "$label max[$maxs] cur[$curs] cpu_max=${read(CPU_MAX_FREQ)}")
+    }
+
+    private fun dumpFreqOpcodeFields(clazz: Class<*>) {
+        val fields = runCatching { clazz.declaredFields }.getOrNull() ?: return
+        val interesting = fields.filter { f ->
+            val n = f.name.uppercase()
+            (n.contains("FREQ") || n.contains("CLUSTER") || n.contains("MPCTL") || n.contains("CPUFREQ")) &&
+                (f.type == Int::class.javaPrimitiveType || f.type == Integer::class.java)
+        }
+        if (interesting.isEmpty()) {
+            Log.d(TAG, "No freq/cluster opcode fields found on ${clazz.name}")
+            return
+        }
+        interesting.forEach { f ->
+            val v = runCatching {
+                f.isAccessible = true
+                f.getInt(null)
+            }.getOrNull()
+            Log.d(TAG, "FIELD ${f.name} = ${v?.let { "0x" + it.toString(16) } ?: "?"}")
+        }
+    }
+
+    private fun discoverMaxFreqOpcodes(clazz: Class<*>): List<Int> {
+        val fields = runCatching { clazz.declaredFields }.getOrNull() ?: return emptyList()
+        return fields.mapNotNull { f ->
+            val n = f.name.uppercase()
+            if (n.contains("MAX") && n.contains("FREQ") && n.contains("CLUSTER")) {
+                runCatching { f.isAccessible = true; f.getInt(null) }.getOrNull()
+            } else null
+        }
     }
 
     private fun tryConstructBoostFramework(context: Context): Any? {
-        val classNames = listOf(
-            "android.util.BoostFramework",
-            "com.qualcomm.qti.Performance",
-        )
-        for (name in classNames) {
+        for (name in listOf("android.util.BoostFramework", "com.qualcomm.qti.Performance")) {
             val clazz = runCatching { Class.forName(name) }.getOrNull() ?: continue
-
-            // Enumerate ALL declared constructors and try each, filling
-            // parameters with plausible values. BoostFramework's ctor
-            // signature varies widely across Android/Qualcomm releases.
             val ctors = clazz.declaredConstructors
             Log.d(TAG, "Class $name has ${ctors.size} constructor(s)")
             for (ctor in ctors) {
-                val paramTypes = ctor.parameterTypes
-                val sig = paramTypes.joinToString(",") { it.simpleName }
-                val args = buildConstructorArgs(paramTypes, context)
-                if (args == null) {
-                    Log.d(TAG, "  ctor($sig): no arg-fill strategy, skipping")
-                    continue
-                }
+                val args = buildConstructorArgs(ctor.parameterTypes, context) ?: continue
                 val instance = runCatching {
                     ctor.isAccessible = true
                     ctor.newInstance(*args)
-                }
-                if (instance.isSuccess && instance.getOrNull() != null) {
-                    Log.d(TAG, "  ctor($sig): SUCCESS")
-                    return instance.getOrNull()
-                } else {
-                    Log.d(TAG, "  ctor($sig): failed - ${instance.exceptionOrNull()?.cause?.message ?: instance.exceptionOrNull()?.message}")
-                }
+                }.getOrNull()
+                if (instance != null) return instance
             }
-            Log.d(TAG, "Found class $name but no constructor could be invoked")
-            // Dump full ctor signatures + perfLock* methods to guide the
-            // next iteration.
-            clazz.declaredConstructors.forEach { c ->
-                Log.d(TAG, "  available ctor: ${c.parameterTypes.joinToString(",") { it.name }}")
-            }
-            clazz.methods.filter { it.name.startsWith("perfLock") || it.name.startsWith("perfHint") || it.name.startsWith("perfGet") }
-                .forEach { m ->
-                    Log.d(TAG, "  available method: ${m.name}(${m.parameterTypes.joinToString(",") { it.simpleName }})")
-                }
         }
         return null
     }
 
-    /**
-     * Produce a plausible argument array for [paramTypes], or null if we
-     * don't know how to fill one of the parameters. Context params get
-     * [context]; boolean params get false; String params get null;
-     * everything else null (reference) — which covers the common
-     * BoostFramework signatures like (Context), (boolean),
-     * (Context, boolean), (Context, String), ().
-     */
     private fun buildConstructorArgs(paramTypes: Array<Class<*>>, context: Context): Array<Any?>? {
         val args = arrayOfNulls<Any?>(paramTypes.size)
         for (i in paramTypes.indices) {
             val t = paramTypes[i]
             args[i] = when {
-                t == Context::class.java || Context::class.java.isAssignableFrom(t) -> context
+                Context::class.java.isAssignableFrom(t) -> context
                 t == Boolean::class.javaPrimitiveType -> false
                 t == Int::class.javaPrimitiveType -> 0
                 t == Long::class.javaPrimitiveType -> 0L
-                t.isPrimitive -> return null // some other primitive we can't guess
-                else -> null // reference type: pass null
+                t.isPrimitive -> return null
+                else -> null
             }
         }
         return args
     }
 
-    private fun findPerfLockAcquire(framework: Any): Method? {
-        return framework.javaClass.methods.firstOrNull {
-            it.name == "perfLockAcquire" &&
-                it.parameterTypes.size == 2 &&
+    private fun findPerfLockAcquire(framework: Any): Method? =
+        framework.javaClass.methods.firstOrNull {
+            it.name == "perfLockAcquire" && it.parameterTypes.size == 2 &&
                 it.parameterTypes[0] == Int::class.javaPrimitiveType &&
                 it.parameterTypes[1] == IntArray::class.java
         } ?: framework.javaClass.methods.firstOrNull { it.name == "perfLockAcquire" }
-    }
 
-    private fun findPerfLockRelease(framework: Any): Method? {
-        return framework.javaClass.methods.firstOrNull { it.name == "perfLockRelease" }
-    }
+    private fun findMethod(framework: Any, name: String): Method? =
+        framework.javaClass.methods.firstOrNull { it.name == name }
 
-    private fun invokeAcquire(acquire: Method, framework: Any, duration: Int, args: IntArray): Any? {
-        // Handle both (int, int[]) and (int, int...) which reflects as (int, int[])
-        return if (acquire.parameterTypes.size == 2 && acquire.parameterTypes[1] == IntArray::class.java) {
-            acquire.invoke(framework, duration, args)
-        } else {
-            // varargs form: (int, int...) -> pass boxed array
-            acquire.invoke(framework, duration, args)
-        }
-    }
-
-    private fun readFreq(): String {
-        return runCatching {
-            File(PRIME_PATH).readText().trim()
-        }.getOrDefault("<read-failed>")
-    }
+    private fun read(path: String): String =
+        runCatching { File(path).readText().trim() }.getOrDefault("<na>")
 }
