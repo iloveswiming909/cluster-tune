@@ -90,6 +90,12 @@ private val executionMethodInfo = listOf(
         note = "Preferred when available: direct output, no extra permission.",
     ),
     ExecutionMethodInfo(
+        id = "pserver-noout",
+        label = "PServer (write-only)",
+        appliesTo = "AYN devices whose PServer stdout is broken (e.g. Odin 2 Mini).",
+        note = "Applies changes fire-and-forget as root; reads via direct file access.",
+    ),
+    ExecutionMethodInfo(
         id = "shizuku",
         label = "Shizuku",
         appliesTo = "Rooted devices running Shizuku or Sui.",
@@ -696,7 +702,7 @@ private fun ExecutionMethodSelectionDialog(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    executionMethodInfo.take(2).forEach { info ->
+                    executionMethodInfo.take(3).forEach { info ->
                         ExecutionMethodOptionRow(
                             info = info,
                             selected = selectedMethodId == info.id,
@@ -711,7 +717,7 @@ private fun ExecutionMethodSelectionDialog(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    executionMethodInfo.drop(2).forEach { info ->
+                    executionMethodInfo.drop(3).forEach { info ->
                         ExecutionMethodOptionRow(
                             info = info,
                             selected = selectedMethodId == info.id,

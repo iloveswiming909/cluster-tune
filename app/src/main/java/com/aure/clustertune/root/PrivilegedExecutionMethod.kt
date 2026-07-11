@@ -124,6 +124,7 @@ class PrivilegedExecutionResolver(
     companion object {
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",
+            "pserver-noout",
             "shizuku",
             "pserver-file-output",
             "root-shell",
@@ -134,6 +135,7 @@ class PrivilegedExecutionResolver(
             return PrivilegedExecutionResolver(
                 listOf(
                     PServerStdoutExecutionMethod(context, rootExec),
+                    PServerFireAndForgetExecutionMethod(context, rootExec),
                     PServerFileOutputExecutionMethod(context, rootExec),
                     RootShellExecutionMethod(),
                     ShizukuExecutionMethod(),

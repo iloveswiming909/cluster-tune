@@ -414,6 +414,7 @@ class TunerViewModel(
     private fun formatExecutionMethod(methodId: String): String {
         return when (methodId) {
             "pserver-stdout" -> "PServer"
+            "pserver-noout" -> "PServer (write-only)"
             "pserver-file-output" -> "PServer fallback"
             "root-shell" -> "Root shell"
             "shizuku" -> "Shizuku"
