@@ -1,45 +1,35 @@
-ClusterTune BoostFramework probe v4
-===================================
+ClusterTune BoostFramework probe v5 - focused hold-and-measure
+==============================================================
 
-WHERE WE ARE:
-  v3 log was a big step: hidden-API bypass worked, BoostFramework
-  constructed, perfLockAcquire(int,int[]) returned VALID handles
-  (5422+) with NO SELinux denial. But scaling_max_freq didn't move
-  with opcode 0x40804200.
+WHY: v4 showed a FAINT signal that big-cluster opcode 0x40804000 held
+policy3's cur_freq down (1920000 vs 2323200), but it was too noisy to
+trust - locks were released between samples, load was one unpinned
+thread, single samples.
 
-  Likely reason: perflock frequency caps are applied in the perf HAL /
-  governor layer and often DON'T write scaling_max_freq. The cap shows
-  up in scaling_CUR_freq under load, not in the static max. OR the
-  opcode is simply wrong for this build.
+v5 removes every confounder:
+  Phase A: ALL cores loaded, NO lock  -> record PEAK cur_freq/cluster.
+  Phase B: hold ONE big-cluster perflock, keep load -> PEAK again.
+  Phase C: release lock, keep load    -> PEAK again (recovery check).
+Samples ~every 25ms and reports the peak, so DVFS jitter averages out.
+Tries big-cluster opcodes {0x40804000, 0x40804200, 0x40804100} with
+both kHz and index-style target values.
 
-v4 DOES:
-  - Dumps every BoostFramework field that looks like a freq/cluster
-    opcode (FIELD <name> = 0x...), so we can use the device's OWN
-    constants instead of guessing.
-  - Tries a RANGE of candidate opcodes.
-  - After each acquire, reads ALL policies' scaling_max_freq AND
-    scaling_cur_freq, plus cpu_max_freq.
-  - Spins CPU load during measurement so cur_freq is meaningful.
+VERDICT LINES tell the story directly:
+  "VERDICT op=0x... target=...: p3 A=<peak> B=<peak> C=<peak> -> ..."
+  - "*** CAP WORKS ***" means B peak was >=100MHz below A peak
+    (i.e. the lock actually capped the big cluster), and "+recovered"
+    means C climbed back.
+  - "no cap" for all combos means perflock does NOT cap CPU freq on this
+    firmware from an app -> this path is dead, and we go to the handoff.
 
-HOW TO TEST (same as before):
+NOTE: the device will run all cores flat-out for ~5-35s (fans will spin,
+it'll warm up). That's the load generator; it stops when the test ends.
+
+HOW TO TEST:
     cd C:\platform-tools
     .\adb logcat -c
-  Open ClusterTune, wait ~15s (it runs several opcode/value combos), then:
-    .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe4.log
-  Upload boost-probe4.log.
+  Open ClusterTune, wait ~40s (let it finish all phases), then:
+    .\adb logcat -d | Select-String -Pattern "ClusterTuneBoost" | Out-File -Encoding utf8 boost-probe5.log
+  Upload boost-probe5.log.
 
-WHAT TO LOOK FOR:
-  - "FIELD ..._MAX_FREQ_CLUSTER_... = 0x...." lines -> the REAL opcodes.
-    Even if nothing moves, these tell us the exact constants to use.
-  - Any line where curUnderLoad for p7 drops well below baseline while
-    a cap is held -> the cap WORKS (just not via scaling_max_freq).
-  - Any change in max[...] or cpu_max -> cap writes a sysnode directly.
-
-HONEST NOTE: even if this works, a perflock is a TEMPORARY cap (held
-while the lock is alive). Turning it into a persistent underclock needs
-a long-held lock + a background service to re-acquire it. Heavier than
-writing scaling_max_freq, but still no-root / no-Settings-detour. We'll
-weigh that against the Odin Settings handoff once we know it caps.
-
-Reminder: OdinHandoffDialog.kt must NOT be in your fork (0.3.1 leftover
-that breaks the build). Absent from this tree.
+Reminder: OdinHandoffDialog.kt must NOT be in your fork.
