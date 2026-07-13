@@ -194,10 +194,7 @@ fun WirelessDebugSetupScreen(
                                 modifier = Modifier.padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text(
-                                    "Read the 6-digit code from the system pane and type it HERE " +
-                                        "(don't type it in the system dialog — that makes it close).",
-                                )
+                                Text("Enter the 6-digit code shown in the system pane:")
                                 OutlinedTextField(
                                     value = pairingCode,
                                     onValueChange = { pairingCode = it.filter(Char::isDigit).take(6) },
@@ -211,16 +208,23 @@ fun WirelessDebugSetupScreen(
                                         busy = true
                                         status = "Pairing…"
                                         scope.launch {
+                                            var paired = false
+                                            var errorMsg: String? = null
                                             withContext(Dispatchers.IO) {
                                                 connectionManager.pair(
                                                     code = pairingCode,
-                                                    onPaired = {},
-                                                    onError = {},
+                                                    onPaired = { paired = true },
+                                                    onError = { errorMsg = it.message ?: "pairing failed" },
                                                 )
                                             }
-                                            pairingReady = false
                                             busy = false
-                                            startConnect()
+                                            if (paired) {
+                                                pairingReady = false
+                                                status = "Paired. Connecting…"
+                                                startConnect()
+                                            } else {
+                                                status = "Pairing failed: ${errorMsg ?: "check the code and try again"}"
+                                            }
                                         }
                                     },
                                     enabled = pairingCode.length == 6 && !busy,

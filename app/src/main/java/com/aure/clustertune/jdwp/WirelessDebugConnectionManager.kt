@@ -41,6 +41,12 @@ class WirelessDebugConnectionManager(
     private var pairingHost: String? = null
     private var pairingPort: Int = 0
 
+    // True while a pair() handshake is running or has just succeeded. When set,
+    // the mDNS "pairing service lost" callback is expected (Android closes its
+    // dialog on success) and must NOT be surfaced as a failure.
+    @Volatile
+    private var pairingInProgressOrDone: Boolean = false
+
     /** Provider to hand to [JdwpInjectionExecutionMethod]. */
     fun provider(): () -> AdbConnectionInfo? = { connectionInfo }
 
@@ -82,10 +88,18 @@ class WirelessDebugConnectionManager(
         onLost: () -> Unit = {},
     ) {
         stopPairingDiscovery()
+        pairingInProgressOrDone = false
         pairingResolver = with(appContext) {
             resolveAdbPairingPort(onLost = {
-                Log.d(TAG, "startPairingDiscovery: pairing port lost")
-                onLost()
+                // Android stops advertising the pairing service the moment
+                // pairing succeeds (it closes its own dialog). Only treat this
+                // as "dialog closed" if the user hasn't started pairing yet.
+                if (!pairingInProgressOrDone) {
+                    Log.d(TAG, "startPairingDiscovery: pairing port lost (before pairing)")
+                    onLost()
+                } else {
+                    Log.d(TAG, "startPairingDiscovery: pairing port lost (expected after pairing) — ignoring")
+                }
             }) { host, port ->
                 pairingHost = host
                 pairingPort = port
@@ -111,14 +125,18 @@ class WirelessDebugConnectionManager(
             onError(IllegalStateException("Pairing port not found yet"))
             return
         }
+        pairingInProgressOrDone = true
         runCatching {
             Log.d(TAG, "pair: pairing with $host:$port ...")
             AdbWirelessPairing(host, port, code).use { it.start() }
         }.onSuccess {
             Log.d(TAG, "pair: SUCCESS")
+            stopPairingDiscovery()
             onPaired()
         }.onFailure {
             Log.w(TAG, "pair: FAILED", it)
+            // allow the user to retry pairing
+            pairingInProgressOrDone = false
             onError(it)
         }
     }
