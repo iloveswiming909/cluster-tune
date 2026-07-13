@@ -1,5 +1,6 @@
 package com.aure.clustertune.jdwp
 
+import android.content.Context
 import com.wuyr.jdwp_injector.adb.AdbWirelessPairing
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbPairingPort
@@ -22,7 +23,11 @@ import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbWi
  *      pair(code, ...) with the 6-digit code shown under Wireless debugging.
  *   3. On success, [connectionInfo] is populated and injection can run.
  */
-class WirelessDebugConnectionManager {
+class WirelessDebugConnectionManager(
+    context: Context,
+) {
+
+    private val appContext = context.applicationContext
 
     @Volatile
     var connectionInfo: AdbConnectionInfo? = null
@@ -52,9 +57,13 @@ class WirelessDebugConnectionManager {
             connectionInfo = info
             onConnected(info)
         }
-        connectResolver = resolveAdbTcpConnectPort { host, port -> handle(host, port) }
-        wirelessConnectResolver = resolveAdbWirelessConnectPort(onLost = { onUnavailable() }) { host, port ->
-            handle(host, port)
+        connectResolver = with(appContext) {
+            resolveAdbTcpConnectPort { host, port -> handle(host, port) }
+        }
+        wirelessConnectResolver = with(appContext) {
+            resolveAdbWirelessConnectPort(onLost = { onUnavailable() }) { host, port ->
+                handle(host, port)
+            }
         }
     }
 
@@ -67,10 +76,12 @@ class WirelessDebugConnectionManager {
         onLost: () -> Unit = {},
     ) {
         stopPairingDiscovery()
-        pairingResolver = resolveAdbPairingPort(onLost = { onLost() }) { host, port ->
-            pairingHost = host
-            pairingPort = port
-            onPairingPortFound(host, port)
+        pairingResolver = with(appContext) {
+            resolveAdbPairingPort(onLost = { onLost() }) { host, port ->
+                pairingHost = host
+                pairingPort = port
+                onPairingPortFound(host, port)
+            }
         }
     }
 

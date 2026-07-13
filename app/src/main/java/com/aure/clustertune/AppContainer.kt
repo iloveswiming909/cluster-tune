@@ -28,7 +28,7 @@ class AppContainer(context: Context) {
      * setup UI (pairing + port discovery).
      */
     val wirelessDebugConnectionManager: WirelessDebugConnectionManager by lazy {
-        WirelessDebugConnectionManager()
+        WirelessDebugConnectionManager(appContext)
     }
 
     val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
