@@ -7,6 +7,7 @@ import com.aure.clustertune.data.InstalledAppRepository
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.ProfileStorage
 import com.aure.clustertune.data.SettingsStorage
+import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
 import com.aure.clustertune.root.ExecutionMethodSysfsLister
 import com.aure.clustertune.root.PerformanceCommandBuilder
 import com.aure.clustertune.root.PServerSysfsReader
@@ -21,8 +22,20 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * Holds the on-device wireless-debugging connection used by the no-root
+     * JDWP injection execution method. Populated by the wireless-debugging
+     * setup UI (pairing + port discovery).
+     */
+    val wirelessDebugConnectionManager: WirelessDebugConnectionManager by lazy {
+        WirelessDebugConnectionManager()
+    }
+
     val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
-        PrivilegedExecutionResolver.default(appContext)
+        PrivilegedExecutionResolver.default(
+            appContext,
+            jdwpConnectionProvider = wirelessDebugConnectionManager.provider(),
+        )
     }
 
     val settingsStorage: SettingsStorage by lazy {

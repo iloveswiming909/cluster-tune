@@ -98,6 +98,10 @@ android {
 }
 
 dependencies {
+    // On-device JDWP injection (wireless-debugging) — vendored from
+    // github.com/wuyr/jdwp-injector-for-android (Apache-2.0). Used to run
+    // profile scripts as system on unrooted devices via GameAssistant.
+    implementation(project(":jdwp-injector"))
     val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
 
     implementation("androidx.core:core-ktx:1.13.1")

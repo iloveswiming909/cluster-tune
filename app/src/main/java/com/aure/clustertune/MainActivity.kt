@@ -40,6 +40,7 @@ import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.SettingsScreen
 import com.aure.clustertune.ui.SingleToast
 import com.aure.clustertune.ui.TunerViewModel
+import com.aure.clustertune.ui.WirelessDebugSetupScreen
 import com.aure.clustertune.ui.theme.ClusterTuneTheme
 import com.aure.clustertune.update.AppRelease
 import com.aure.clustertune.update.AppUpdateManager
@@ -110,6 +111,7 @@ class MainActivity : ComponentActivity() {
                     val launchableApps = viewModel.launchableApps.collectAsStateWithLifecycle().value
                     val recentActiveApps = viewModel.recentActiveApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var showWirelessSetup by rememberSaveable { mutableStateOf(false) }
                     var overlayPermissionRefresh by remember { mutableStateOf(0) }
                     DisposableEffect(Unit) {
                         val observer = LifecycleEventObserver { _, event ->
@@ -124,7 +126,12 @@ class MainActivity : ComponentActivity() {
                         OverlayPermission.canDrawOverlays(this@MainActivity)
                     }
 
-                    if (showSettings) {
+                    if (showWirelessSetup) {
+                        WirelessDebugSetupScreen(
+                            connectionManager = container.wirelessDebugConnectionManager,
+                            onBack = { showWirelessSetup = false },
+                        )
+                    } else if (showSettings) {
                         SettingsScreen(
                             settings = settings,
                             onBack = { showSettings = false },
@@ -175,6 +182,7 @@ class MainActivity : ComponentActivity() {
                             onProfileSwitchHistoryLimitChange = viewModel::setProfileSwitchHistoryLimit,
                             onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
                             onAutoDetectPrivilegedExecutionMethod = viewModel::autoDetectPrivilegedExecutionMethod,
+                            onOpenWirelessDebugSetup = { showWirelessSetup = true },
                             isShizukuPermissionGranted = shizukuCommandRunner.hasPermission(),
                             onRequestShizukuPermission = ::requestShizukuPermission,
                         )

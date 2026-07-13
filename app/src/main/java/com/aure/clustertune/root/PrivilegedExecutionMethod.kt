@@ -128,19 +128,35 @@ class PrivilegedExecutionResolver(
             "shizuku",
             "pserver-file-output",
             "root-shell",
+            // No-root path via on-device wireless debugging; tried last so it
+            // only activates when no privileged (root/PServer) path exists.
+            "jdwp-inject",
         )
 
-        fun default(context: Context): PrivilegedExecutionResolver {
+        /**
+         * @param jdwpConnectionProvider supplies the on-device wireless-debugging
+         *   host/port once paired. When non-null, the no-root JDWP injection
+         *   method is registered (for unrooted devices). May be null (e.g. in
+         *   tests) to omit it.
+         */
+        fun default(
+            context: Context,
+            jdwpConnectionProvider: (() -> com.aure.clustertune.jdwp.AdbConnectionInfo?)? = null,
+        ): PrivilegedExecutionResolver {
             val rootExec = RootExec()
-            return PrivilegedExecutionResolver(
-                listOf(
-                    PServerStdoutExecutionMethod(context, rootExec),
-                    PServerFireAndForgetExecutionMethod(context, rootExec),
-                    PServerFileOutputExecutionMethod(context, rootExec),
-                    RootShellExecutionMethod(),
-                    ShizukuExecutionMethod(),
-                ),
+            val methods = mutableListOf<PrivilegedExecutionMethod>(
+                PServerStdoutExecutionMethod(context, rootExec),
+                PServerFireAndForgetExecutionMethod(context, rootExec),
+                PServerFileOutputExecutionMethod(context, rootExec),
+                RootShellExecutionMethod(),
+                ShizukuExecutionMethod(),
             )
+            if (jdwpConnectionProvider != null) {
+                methods += com.aure.clustertune.jdwp.JdwpInjectionExecutionMethod(
+                    connectionProvider = jdwpConnectionProvider,
+                )
+            }
+            return PrivilegedExecutionResolver(methods)
         }
     }
 }

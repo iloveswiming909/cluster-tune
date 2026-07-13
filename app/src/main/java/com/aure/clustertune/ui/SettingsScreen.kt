@@ -113,6 +113,12 @@ private val executionMethodInfo = listOf(
         appliesTo = "Generic rooted devices with Magisk/su.",
         note = "Broad fallback when PServer and Shizuku are not usable.",
     ),
+    ExecutionMethodInfo(
+        id = "jdwp-inject",
+        label = "Wireless debug (no root)",
+        appliesTo = "Unrooted Odin 2 / 2 Mini via GameAssistant + wireless debugging.",
+        note = "No root needed. Requires Wireless debugging enabled and paired once per boot.",
+    ),
 )
 
 @Composable
@@ -144,6 +150,7 @@ fun SettingsScreen(
     onProfileSwitchHistoryLimitChange: (Int) -> Unit,
     onPrivilegedExecutionMethodChange: (String?) -> Unit,
     onAutoDetectPrivilegedExecutionMethod: () -> Unit,
+    onOpenWirelessDebugSetup: () -> Unit,
     isShizukuPermissionGranted: Boolean,
     onRequestShizukuPermission: () -> Unit,
 ) {
@@ -400,6 +407,7 @@ fun SettingsScreen(
             onAutoDetect = onAutoDetectPrivilegedExecutionMethod,
             onMethodChange = onPrivilegedExecutionMethodChange,
             onRequestShizukuPermission = onRequestShizukuPermission,
+            onOpenWirelessDebugSetup = onOpenWirelessDebugSetup,
         )
 
         SettingsSection(title = "Startup", symbol = "power_settings_new") {
@@ -565,6 +573,7 @@ private fun DeviceExecutionMethodCard(
     onAutoDetect: () -> Unit,
     onMethodChange: (String?) -> Unit,
     onRequestShizukuPermission: () -> Unit,
+    onOpenWirelessDebugSetup: () -> Unit,
 ) {
     val selectedInfo = executionMethodInfo.firstOrNull { info -> info.id == selectedMethodId }
     val needsPermission = selectedMethodId == "shizuku" && !isShizukuPermissionGranted
@@ -648,6 +657,24 @@ private fun DeviceExecutionMethodCard(
                     )
                     Text(
                         text = permissionButtonLabel(selectedMethodId, isShizukuPermissionGranted),
+                        modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
+                    )
+                }
+            }
+
+            if (selectedMethodId == "jdwp-inject") {
+                FilledTonalButton(
+                    onClick = onOpenWirelessDebugSetup,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+                ) {
+                    MaterialSymbol(
+                        name = "wifi_tethering",
+                        contentDescription = null,
+                        size = ButtonDefaults.IconSize,
+                    )
+                    Text(
+                        text = "Set up wireless debugging",
                         modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
                     )
                 }
@@ -862,6 +889,7 @@ private fun executionMethodLabel(methodId: String): String {
         "pserver-file-output" -> "PServer fallback"
         "root-shell" -> "Root shell"
         "shizuku" -> "Shizuku"
+        "jdwp-inject" -> "Wireless debug (no root)"
         else -> methodId
     }
 }
