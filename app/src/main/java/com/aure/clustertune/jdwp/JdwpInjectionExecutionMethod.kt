@@ -2,6 +2,7 @@ package com.aure.clustertune.jdwp
 
 import android.annotation.SuppressLint
 import android.os.Environment
+import android.util.Log
 import com.aure.clustertune.root.ExecutionProbeResult
 import com.aure.clustertune.root.PrivilegedExecutionMethod
 import com.wuyr.jdwp_injector.adb.AdbClient
@@ -41,18 +42,25 @@ class JdwpInjectionExecutionMethod(
 
     override fun probe(): ExecutionProbeResult {
         val conn = connectionProvider()
-            ?: return unavailable("Wireless debugging not connected")
+        if (conn == null) {
+            Log.d(TAG, "probe: NOT available - wireless debugging not connected (connectionProvider returned null). Run 'Set up wireless debugging' first.")
+            return unavailable("Wireless debugging not connected")
+        }
+        Log.d(TAG, "probe: have connection ${conn.host}:${conn.port}, opening shell to find GameAssistant...")
         return try {
             AdbClient.openShell(conn.host, conn.port).use { adb ->
                 val pid = findTargetPid(adb)
+                Log.d(TAG, "probe: GameAssistant ($targetPackage) pid=$pid")
                 if (pid <= 0) {
+                    Log.d(TAG, "probe: NOT available - GameAssistant is not running (open Game Assistant once, then retry)")
                     unavailable("GameAssistant is not running")
                 } else {
-                    // present + debuggable + reachable
+                    Log.d(TAG, "probe: AVAILABLE - connected + GameAssistant running")
                     ExecutionProbeResult(isAvailable = true, supportsStdout = false)
                 }
             }
         } catch (t: Throwable) {
+            Log.w(TAG, "probe: NOT available - error talking to adbd: ${t.message}", t)
             unavailable(t.message ?: t::class.java.simpleName)
         }
     }
@@ -64,16 +72,22 @@ class JdwpInjectionExecutionMethod(
      */
     override fun executeScript(scriptName: String, scriptContents: String): Result<String?> {
         val conn = connectionProvider()
-            ?: return Result.failure(IllegalStateException("Wireless debugging not connected"))
+        if (conn == null) {
+            Log.w(TAG, "executeScript: no wireless connection")
+            return Result.failure(IllegalStateException("Wireless debugging not connected"))
+        }
         return runCatching {
             val scriptPath = stageScript(scriptName, scriptContents)
+            Log.d(TAG, "executeScript: staged '$scriptName' -> $scriptPath (${scriptContents.length} bytes)")
             AdbClient.openShell(conn.host, conn.port).use { adb ->
                 val pid = findTargetPid(adb)
                 if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
+                Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid")
                 injectExec(conn, adb, "sh ${scriptPath}")
+                Log.d(TAG, "executeScript: injection dispatched OK")
             }
             null
-        }
+        }.onFailure { Log.w(TAG, "executeScript: FAILED", it) }
     }
 
     /**
@@ -131,10 +145,16 @@ class JdwpInjectionExecutionMethod(
     // ---- internals ----
 
     private fun findTargetPid(adb: AdbClient): Int = runCatching {
-        adb.sendShellCommand(
+        val raw = adb.sendShellCommand(
             "ps -A -o PID,NAME | grep -w ${targetPackage} | awk 'NR==1{print \$1}'"
-        ).split("\n").getOrNull(1)?.trim()?.toInt() ?: 0
-    }.getOrDefault(0)
+        )
+        val pid = raw.split("\n").getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+        Log.d(TAG, "findTargetPid: raw=${raw.replace("\n", "\\n")} -> pid=$pid")
+        pid
+    }.getOrElse {
+        Log.w(TAG, "findTargetPid: error", it)
+        0
+    }
 
     /**
      * The core: attach to GameAssistant, get a running thread, invoke
@@ -147,28 +167,31 @@ class JdwpInjectionExecutionMethod(
     private fun injectExec(conn: AdbConnectionInfo, shellAdb: AdbClient, command: String) {
         val pid = findTargetPid(shellAdb)
         if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
+        Log.d(TAG, "injectExec: attaching JDWP to pid=$pid, command='$command'")
         Debugger(AdbClient.connect2jdwp(conn.host, conn.port, pid)).use { debugger ->
+            Log.d(TAG, "injectExec: waiting for thread via MessageQueue watch + attach-agent trigger")
             val threadId = debugger.setAndWaitForModificationEventArrive(
                 "android.os.MessageQueue", "mMessages", "android.os.Message"
             ) {
-                // Wake the target so the watched field is touched by its looper.
                 shellAdb.sendShellCommand("am attach-agent ${targetPackage} /")
             }
+            Log.d(TAG, "injectExec: got threadId=$threadId; invoking Runtime.getRuntime()")
             try {
                 val runtimeObjectId = debugger.invokeStaticMethod(
                     "java.lang.Runtime", "getRuntime",
                     returnTypeName = "java.lang.Runtime", threadId = threadId
                 ).second as Long
-                // Runtime.exec(String) tokenizes on whitespace; our command is
-                // "sh <path>" with no spaces in the path -> ["sh","<path>"].
+                Log.d(TAG, "injectExec: Runtime obj=$runtimeObjectId; invoking exec()")
                 debugger.invokeInstanceMethod(
                     runtimeObjectId, "java.lang.Runtime", "exec",
                     returnTypeName = "java.lang.Process", threadId = threadId,
                     "java.lang.String" to command
                 )
+                Log.d(TAG, "injectExec: exec() invoked")
             } finally {
                 debugger.resumeVM()
                 debugger.dispose()
+                Log.d(TAG, "injectExec: resumed + disposed")
             }
         }
     }
@@ -190,6 +213,7 @@ class JdwpInjectionExecutionMethod(
         ExecutionProbeResult(isAvailable = false, supportsStdout = false, failureReason = reason)
 
     companion object {
+        const val TAG = "ClusterTuneJdwp"
         const val GAME_ASSISTANT_PKG = "com.odin2.gameassistant"
 
         private const val SHARED_DIR_NAME = "ClusterScripts"

@@ -1,6 +1,7 @@
 package com.aure.clustertune.jdwp
 
 import android.content.Context
+import android.util.Log
 import com.wuyr.jdwp_injector.adb.AdbWirelessPairing
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbPairingPort
@@ -52,16 +53,21 @@ class WirelessDebugConnectionManager(
         onUnavailable: () -> Unit = {},
     ) {
         stopConnectDiscovery()
+        Log.d(TAG, "startConnectDiscovery: looking for adb connect port (mDNS)...")
         val handle: (String, Int) -> Unit = { host, port ->
             val info = AdbConnectionInfo(host, port)
             connectionInfo = info
+            Log.d(TAG, "startConnectDiscovery: CONNECTED $host:$port")
             onConnected(info)
         }
         connectResolver = with(appContext) {
             resolveAdbTcpConnectPort { host, port -> handle(host, port) }
         }
         wirelessConnectResolver = with(appContext) {
-            resolveAdbWirelessConnectPort(onLost = { onUnavailable() }) { host, port ->
+            resolveAdbWirelessConnectPort(onLost = {
+                Log.d(TAG, "startConnectDiscovery: connect port lost/unavailable")
+                onUnavailable()
+            }) { host, port ->
                 handle(host, port)
             }
         }
@@ -77,9 +83,13 @@ class WirelessDebugConnectionManager(
     ) {
         stopPairingDiscovery()
         pairingResolver = with(appContext) {
-            resolveAdbPairingPort(onLost = { onLost() }) { host, port ->
+            resolveAdbPairingPort(onLost = {
+                Log.d(TAG, "startPairingDiscovery: pairing port lost")
+                onLost()
+            }) { host, port ->
                 pairingHost = host
                 pairingPort = port
+                Log.d(TAG, "startPairingDiscovery: pairing port found $host:$port")
                 onPairingPortFound(host, port)
             }
         }
@@ -102,10 +112,19 @@ class WirelessDebugConnectionManager(
             return
         }
         runCatching {
+            Log.d(TAG, "pair: pairing with $host:$port ...")
             AdbWirelessPairing(host, port, code).use { it.start() }
         }.onSuccess {
+            Log.d(TAG, "pair: SUCCESS")
             onPaired()
-        }.onFailure { onError(it) }
+        }.onFailure {
+            Log.w(TAG, "pair: FAILED", it)
+            onError(it)
+        }
+    }
+
+    private companion object {
+        const val TAG = "ClusterTuneJdwpConn"
     }
 
     fun stopConnectDiscovery() {
