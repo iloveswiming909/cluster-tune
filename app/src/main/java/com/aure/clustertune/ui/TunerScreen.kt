@@ -149,6 +149,7 @@ fun MainTunerScreen(
     onDeleteAppProfileAssignment: (String) -> Unit,
     onRefreshInstalledApps: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenWirelessDebugSetup: () -> Unit,
     onRefreshLiveValues: () -> Unit,
     onStatusMessageShown: () -> Unit,
     onErrorMessageShown: () -> Unit,
@@ -214,12 +215,26 @@ fun MainTunerScreen(
                     if (state.isLoading) {
                         LoadingClustersCard()
                     } else if (!state.isPServerAvailable) {
-                        Text(
-                            text = "No compatible privileged execution method found",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(
+                                text = "No compatible privileged execution method found",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = "If your device isn't rooted, you can apply profiles over " +
+                                    "Android's built-in Wireless debugging — no root, no PC. " +
+                                    "Set it up once per boot below.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(onClick = onOpenWirelessDebugSetup) {
+                                Text("Set up wireless debugging (no root)")
+                            }
+                        }
                     } else {
                         Box(
                             modifier = Modifier

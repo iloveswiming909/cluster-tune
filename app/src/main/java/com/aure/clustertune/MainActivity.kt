@@ -210,6 +210,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteAppProfileAssignment = viewModel::deleteAppProfileAssignment,
                             onRefreshInstalledApps = viewModel::refreshInstalledApps,
                             onOpenSettings = { showSettings = true },
+                            onOpenWirelessDebugSetup = { showWirelessSetup = true },
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,
                             onErrorMessageShown = viewModel::consumeErrorMessage,
