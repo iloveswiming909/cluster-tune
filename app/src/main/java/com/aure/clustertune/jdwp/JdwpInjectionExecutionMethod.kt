@@ -36,6 +36,7 @@ class JdwpInjectionExecutionMethod(
     private val connectionProvider: () -> AdbConnectionInfo?,
     private val sharedShellProvider: (() -> AdbClient?)? = null,
     private val shellInvalidator: (() -> Unit)? = null,
+    private val persistentInjector: ((targetPackage: String, command: String, pid: Int, trigger: () -> Unit) -> Boolean)? = null,
     private val targetPackage: String = GAME_ASSISTANT_PKG,
     private val sharedDir: File = defaultSharedDir(),
 ) : PrivilegedExecutionMethod {
@@ -82,10 +83,19 @@ class JdwpInjectionExecutionMethod(
         return runCatching {
             val scriptPath = stageScript(scriptName, scriptContents)
             Log.d(TAG, "executeScript: staged '$scriptName' -> $scriptPath (${scriptContents.length} bytes)")
-            // Reuse the persistent shell connection when available (avoids a new
-            // adb transport -> avoids the repeated "connected" heads-up).
             val shell = sharedShellProvider?.invoke()
-            if (shell != null) {
+            val injector = persistentInjector
+            if (shell != null && injector != null) {
+                // Preferred path: reuse the persistent JDWP session + shared
+                // shell (keeps the adb transport open -> no repeated heads-up).
+                val pid = findTargetPid(shell)
+                if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
+                Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid (persistent)")
+                val ok = injector(targetPackage, "sh ${scriptPath}", pid) {
+                    shell.sendShellCommand("am attach-agent ${targetPackage} /")
+                }
+                if (!ok) throw IllegalStateException("Injection failed")
+            } else if (shell != null) {
                 val pid = findTargetPid(shell)
                 if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
                 Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid (shared shell)")

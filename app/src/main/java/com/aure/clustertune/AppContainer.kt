@@ -41,6 +41,9 @@ class AppContainer(context: Context) {
             jdwpConnectionProvider = wirelessDebugConnectionManager.provider(),
             jdwpSharedShellProvider = { wirelessDebugConnectionManager.sharedShell() },
             jdwpShellInvalidator = { wirelessDebugConnectionManager.invalidateShell() },
+            jdwpPersistentInjector = { pkg, command, pid, trigger ->
+                wirelessDebugConnectionManager.injectExecPersistent(pkg, command, pid, trigger)
+            },
         )
     }
 

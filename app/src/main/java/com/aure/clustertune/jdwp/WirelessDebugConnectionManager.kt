@@ -85,6 +85,82 @@ class WirelessDebugConnectionManager private constructor(
         }
     }
 
+    // ---- Persistent JDWP session (reused across applies) --------------------
+    // Attaching a JDWP debugger opens an adb transport, which makes Android post
+    // the "wireless debugging connected" heads-up. Re-attaching on every apply
+    // makes it pop every time. Instead we attach ONCE and keep the session open
+    // (GA runs normally between injections — we always resume the VM), so the
+    // notification fires only on the first attach. We re-attach only if the
+    // session dies (e.g. GA restarts).
+
+    private var persistentDebugger: com.wuyr.jdwp_injector.debugger.Debugger? = null
+    private var persistentDebuggerPid: Int = -1
+    private val jdwpLock = Any()
+
+    /**
+     * Inject `Runtime.getRuntime().exec(command)` into the target as system,
+     * reusing a persistent JDWP session. [triggerAgent] is invoked (over the
+     * shared shell) to wake the target so the watchpoint fires.
+     *
+     * Returns true on success. On any failure the session is dropped so the
+     * next call re-attaches.
+     */
+    fun injectExecPersistent(
+        targetPackage: String,
+        command: String,
+        currentPid: Int,
+        triggerAgent: () -> Unit,
+    ): Boolean {
+        val conn = connectionInfo ?: return false
+        synchronized(jdwpLock) {
+            // (Re)attach if we have no session, or GA's pid changed (restarted).
+            var debugger = persistentDebugger
+            if (debugger == null || persistentDebuggerPid != currentPid) {
+                runCatching { debugger?.close() }
+                debugger = runCatching {
+                    com.wuyr.jdwp_injector.debugger.Debugger(
+                        AdbClient.connect2jdwp(conn.host, conn.port, currentPid)
+                    )
+                }.getOrNull() ?: return false
+                persistentDebugger = debugger
+                persistentDebuggerPid = currentPid
+                JdwpDebugLog.d("jdwp: attached persistent session to pid=$currentPid")
+            }
+            return try {
+                val threadId = debugger.setAndWaitForModificationEventArrive(
+                    "android.os.MessageQueue", "mMessages", "android.os.Message"
+                ) { triggerAgent() }
+                val runtimeObjectId = debugger.invokeStaticMethod(
+                    "java.lang.Runtime", "getRuntime",
+                    returnTypeName = "java.lang.Runtime", threadId = threadId
+                ).second as Long
+                debugger.invokeInstanceMethod(
+                    runtimeObjectId, "java.lang.Runtime", "exec",
+                    returnTypeName = "java.lang.Process", threadId = threadId,
+                    "java.lang.String" to command
+                )
+                debugger.resumeVM() // GA runs normally; session stays attached
+                true
+            } catch (t: Throwable) {
+                JdwpDebugLog.w("jdwp: persistent inject failed; dropping session", t)
+                runCatching { debugger.resumeVM() }
+                runCatching { debugger.close() }
+                persistentDebugger = null
+                persistentDebuggerPid = -1
+                false
+            }
+        }
+    }
+
+    private fun invalidateJdwp() {
+        synchronized(jdwpLock) {
+            runCatching { persistentDebugger?.resumeVM() }
+            runCatching { persistentDebugger?.close() }
+            persistentDebugger = null
+            persistentDebuggerPid = -1
+        }
+    }
+
     private var connectResolver: AdbWirelessPortResolver? = null
     private var wirelessConnectResolver: AdbWirelessPortResolver? = null
 
@@ -222,6 +298,9 @@ class WirelessDebugConnectionManager private constructor(
     }
 
     fun stopAll() {
+        // Note: intentionally does NOT drop the persistent JDWP session or shell
+        // — those must survive leaving the setup screen so profiles keep
+        // applying. Only discovery is stopped here.
         stopConnectDiscovery()
         stopPairingDiscovery()
     }

@@ -164,6 +164,7 @@ class PrivilegedExecutionResolver(
             jdwpConnectionProvider: (() -> com.aure.clustertune.jdwp.AdbConnectionInfo?)? = null,
             jdwpSharedShellProvider: (() -> com.wuyr.jdwp_injector.adb.AdbClient?)? = null,
             jdwpShellInvalidator: (() -> Unit)? = null,
+            jdwpPersistentInjector: ((targetPackage: String, command: String, pid: Int, trigger: () -> Unit) -> Boolean)? = null,
         ): PrivilegedExecutionResolver {
             val rootExec = RootExec()
             val methods = mutableListOf<PrivilegedExecutionMethod>(
@@ -178,6 +179,7 @@ class PrivilegedExecutionResolver(
                     connectionProvider = jdwpConnectionProvider,
                     sharedShellProvider = jdwpSharedShellProvider,
                     shellInvalidator = jdwpShellInvalidator,
+                    persistentInjector = jdwpPersistentInjector,
                 )
             }
             return PrivilegedExecutionResolver(methods)
