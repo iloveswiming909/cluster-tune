@@ -3,6 +3,7 @@ package com.aure.clustertune.jdwp
 import android.content.Context
 import android.util.Log
 import com.wuyr.jdwp_injector.adb.AdbWirelessPairing
+import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbPairingPort
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbTcpConnectPort

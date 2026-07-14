@@ -5,7 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdManager.ServiceInfoCallback
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
-import com.aure.clustertune.jdwp.JdwpDebugLog
+import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 
 /**
  * @author wuyr

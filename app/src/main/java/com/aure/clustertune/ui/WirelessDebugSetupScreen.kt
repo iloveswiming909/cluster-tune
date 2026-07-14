@@ -45,7 +45,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.aure.clustertune.jdwp.JdwpDebugLog
+import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -75,6 +75,13 @@ fun WirelessDebugSetupScreen(
     var pairingCode by remember { mutableStateOf("") }
     var connected by remember { mutableStateOf(connectionManager.connectionInfo != null) }
     var busy by remember { mutableStateOf(false) }
+
+    // Live diagnostic log: mirror JdwpDebugLog into Compose state via its listener.
+    var logLines by remember { mutableStateOf(JdwpDebugLog.snapshot()) }
+    DisposableEffect(Unit) {
+        JdwpDebugLog.setListener { logLines = JdwpDebugLog.snapshot() }
+        onDispose { JdwpDebugLog.setListener(null) }
+    }
 
     DisposableEffect(Unit) {
         devOptionsEnabled = isDevOptionsEnabled(context)
@@ -254,7 +261,7 @@ fun WirelessDebugSetupScreen(
                         left = { Text("Diagnostic log", style = MaterialTheme.typography.titleSmall) },
                         right = { TextButton(onClick = { JdwpDebugLog.clear() }) { Text("Clear") } },
                     )
-                    val logText = JdwpDebugLog.lines.joinToString("\n").ifEmpty { "(no log yet)" }
+                    val logText = logLines.joinToString("\n").ifEmpty { "(no log yet)" }
                     Text(
                         text = logText,
                         fontFamily = FontFamily.Monospace,
