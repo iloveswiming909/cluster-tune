@@ -129,7 +129,11 @@ class MainActivity : ComponentActivity() {
                     if (showWirelessSetup) {
                         WirelessDebugSetupScreen(
                             connectionManager = container.wirelessDebugConnectionManager,
-                            onBack = { showWirelessSetup = false },
+                            onBack = {
+                                showWirelessSetup = false
+                                // Connecting there changes availability; re-probe.
+                                viewModel.recheckExecutionAvailability()
+                            },
                         )
                     } else if (showSettings) {
                         SettingsScreen(

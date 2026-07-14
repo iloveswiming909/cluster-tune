@@ -219,6 +219,14 @@ class PerformanceRepository(
                 profileStorage.persistLastValues(filtered)
                 profileStorage.persistLastAppliedDisplayProfile(appliedDisplayProfileId)
             }
+            // The JDWP injection method applies asynchronously (fire-and-forget:
+            // the injected `echo > scaling_max_freq` runs inside GameAssistant a
+            // moment after executeScript returns). Give it time to land before
+            // reading back, otherwise verification races and falsely reports
+            // "did not stick".
+            if (rootCommandRunner.selectedExecutionMethodId == "jdwp-inject") {
+                kotlinx.coroutines.delay(1200)
+            }
             val actualValues = detector.readCurrentMaxValues(policies)
             refreshLiveValues()
             ApplyOutcome(

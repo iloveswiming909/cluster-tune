@@ -40,29 +40,27 @@ class JdwpInjectionExecutionMethod(
 
     override val id: String = "jdwp-inject"
 
+    @Volatile
+    private var cachedProbe: Pair<Long, ExecutionProbeResult>? = null
+
     override fun probe(): ExecutionProbeResult {
+        // Cheap probe: this is called frequently (state refreshes, app-monitor),
+        // so it must NOT open a wireless adb connection every time — doing so
+        // hammers adbd and spikes CPU. Availability = "we have a wireless-debug
+        // connection". The actual GameAssistant/injection check happens lazily
+        // at executeScript time. Result is cached briefly to avoid churn.
+        val now = System.currentTimeMillis()
+        cachedProbe?.let { (ts, result) ->
+            if (now - ts < PROBE_CACHE_MS) return result
+        }
         val conn = connectionProvider()
-        if (conn == null) {
-            Log.d(TAG, "probe: NOT available - wireless debugging not connected (connectionProvider returned null). Run 'Set up wireless debugging' first.")
-            return unavailable("Wireless debugging not connected")
+        val result = if (conn == null) {
+            unavailable("Wireless debugging not connected")
+        } else {
+            ExecutionProbeResult(isAvailable = true, supportsStdout = false)
         }
-        Log.d(TAG, "probe: have connection ${conn.host}:${conn.port}, opening shell to find GameAssistant...")
-        return try {
-            AdbClient.openShell(conn.host, conn.port).use { adb ->
-                val pid = findTargetPid(adb)
-                Log.d(TAG, "probe: GameAssistant ($targetPackage) pid=$pid")
-                if (pid <= 0) {
-                    Log.d(TAG, "probe: NOT available - GameAssistant is not running (open Game Assistant once, then retry)")
-                    unavailable("GameAssistant is not running")
-                } else {
-                    Log.d(TAG, "probe: AVAILABLE - connected + GameAssistant running")
-                    ExecutionProbeResult(isAvailable = true, supportsStdout = false)
-                }
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "probe: NOT available - error talking to adbd: ${t.message}", t)
-            unavailable(t.message ?: t::class.java.simpleName)
-        }
+        cachedProbe = now to result
+        return result
     }
 
     /**
@@ -214,6 +212,7 @@ class JdwpInjectionExecutionMethod(
 
     companion object {
         const val TAG = "ClusterTuneJdwp"
+        private const val PROBE_CACHE_MS = 5000L
         const val GAME_ASSISTANT_PKG = "com.odin2.gameassistant"
 
         private const val SHARED_DIR_NAME = "ClusterScripts"

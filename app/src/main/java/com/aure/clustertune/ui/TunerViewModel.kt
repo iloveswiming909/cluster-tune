@@ -368,6 +368,20 @@ class TunerViewModel(
         }
     }
 
+    /**
+     * Re-check which execution method is available and refresh state. Called
+     * when returning from the wireless-debug setup screen, since connecting (or
+     * disconnecting) there changes availability but doesn't otherwise re-probe.
+     */
+    fun recheckExecutionAvailability() {
+        viewModelScope.launch {
+            // forceReprobe clears the cached probe so a freshly-connected
+            // wireless-debug method is picked up.
+            privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            repository.refreshLiveValues()
+        }
+    }
+
     fun refreshLiveState() {
         repository.refreshLiveValues()
     }

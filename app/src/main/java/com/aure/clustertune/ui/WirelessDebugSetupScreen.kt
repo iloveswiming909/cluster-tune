@@ -365,13 +365,13 @@ private fun openWirelessDebugging(context: Context) {
  * so the system pairing dialog stays visible while the user types the code.
  */
 private fun openAdjacent(context: Context, intent: Intent) {
-    // Match wuyr's flags exactly: LAUNCH_ADJACENT | MULTIPLE_TASK | CLEAR_TASK
-    // (no NEW_TASK). Launching from the Activity context this way tends to keep
-    // ClusterTune in the primary (left) slot and Settings in the adjacent slot.
+    // FLAG_ACTIVITY_LAUNCH_ADJACENT requires NEW_TASK + MULTIPLE_TASK to place
+    // the launched activity in the adjacent split-screen slot. (Removing
+    // NEW_TASK breaks split screen -> it opens full screen.)
     intent.addFlags(
-        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-            Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-            Intent.FLAG_ACTIVITY_CLEAR_TASK,
+        Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
+            Intent.FLAG_ACTIVITY_MULTIPLE_TASK,
     )
     val options = Bundle().apply { putInt("android.activity.windowingMode", 3) }
     runCatching { context.startActivity(intent, options) }
