@@ -59,24 +59,24 @@ class WirelessDebugConnectionManager(
         onUnavailable: () -> Unit = {},
     ) {
         stopConnectDiscovery()
-        Log.d(TAG, "startConnectDiscovery: looking for adb connect port (mDNS)...")
+        JdwpDebugLog.d("startConnectDiscovery: looking for adb connect port (mDNS)...")
         val handle: (String, Int) -> Unit = { host, port ->
             val info = AdbConnectionInfo(host, port)
             connectionInfo = info
-            Log.d(TAG, "startConnectDiscovery: CONNECTED $host:$port")
+            JdwpDebugLog.d("startConnectDiscovery: CONNECTED $host:$port")
             onConnected(info)
         }
         connectResolver = with(appContext) {
-            resolveAdbTcpConnectPort { host, port -> handle(host, port) }
-        }
-        wirelessConnectResolver = with(appContext) {
             resolveAdbWirelessConnectPort(onLost = {
-                Log.d(TAG, "startConnectDiscovery: connect port lost/unavailable")
+                JdwpDebugLog.d("startConnectDiscovery: connect port lost/unavailable")
                 onUnavailable()
-            }) { host, port ->
-                handle(host, port)
-            }
+            }) { host, port -> handle(host, port) }
         }
+        // Note: we intentionally start ONLY the _adb-tls-connect._tcp discovery.
+        // On Android < 14, NsdManager resolves one service at a time; running a
+        // second discovery (_adb._tcp) concurrently caused resolves to fail with
+        // FAILURE_ALREADY_ACTIVE. The TLS-connect service is the correct one for
+        // a paired device on Android 11+.
     }
 
     /**
@@ -95,15 +95,15 @@ class WirelessDebugConnectionManager(
                 // pairing succeeds (it closes its own dialog). Only treat this
                 // as "dialog closed" if the user hasn't started pairing yet.
                 if (!pairingInProgressOrDone) {
-                    Log.d(TAG, "startPairingDiscovery: pairing port lost (before pairing)")
+                    JdwpDebugLog.d("startPairingDiscovery: pairing port lost (before pairing)")
                     onLost()
                 } else {
-                    Log.d(TAG, "startPairingDiscovery: pairing port lost (expected after pairing) — ignoring")
+                    JdwpDebugLog.d("startPairingDiscovery: pairing port lost (expected after pairing) — ignoring")
                 }
             }) { host, port ->
                 pairingHost = host
                 pairingPort = port
-                Log.d(TAG, "startPairingDiscovery: pairing port found $host:$port")
+                JdwpDebugLog.d("startPairingDiscovery: pairing port found $host:$port")
                 onPairingPortFound(host, port)
             }
         }
@@ -127,14 +127,14 @@ class WirelessDebugConnectionManager(
         }
         pairingInProgressOrDone = true
         runCatching {
-            Log.d(TAG, "pair: pairing with $host:$port ...")
+            JdwpDebugLog.d("pair: pairing with $host:$port ...")
             AdbWirelessPairing(host, port, code).use { it.start() }
         }.onSuccess {
-            Log.d(TAG, "pair: SUCCESS")
+            JdwpDebugLog.d("pair: SUCCESS")
             stopPairingDiscovery()
             onPaired()
         }.onFailure {
-            Log.w(TAG, "pair: FAILED", it)
+            JdwpDebugLog.w("pair: FAILED", it)
             // allow the user to retry pairing
             pairingInProgressOrDone = false
             onError(it)

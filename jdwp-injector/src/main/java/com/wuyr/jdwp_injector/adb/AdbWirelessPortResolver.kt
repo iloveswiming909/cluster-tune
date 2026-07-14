@@ -5,6 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdManager.ServiceInfoCallback
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import com.aure.clustertune.jdwp.JdwpDebugLog
 
 /**
  * @author wuyr
@@ -41,32 +42,39 @@ class AdbWirelessPortResolver private constructor(private val onLost: () -> Unit
 
     override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
         discoveryStarted = false
-
+        JdwpDebugLog.w("discovery start FAILED for $serviceType (errorCode=$errorCode)")
     }
 
     override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
         discoveryStarted = false
+        JdwpDebugLog.w("discovery stop failed for $serviceType (errorCode=$errorCode)")
     }
 
     override fun onDiscoveryStarted(serviceType: String) {
         discoveryStarted = true
+        JdwpDebugLog.d("discovery started: $serviceType")
     }
 
     override fun onDiscoveryStopped(serviceType: String) {
         discoveryStarted = false
+        JdwpDebugLog.d("discovery stopped: $serviceType")
     }
 
     private var foundServiceName = ""
 
     override fun onServiceFound(serviceInfo: NsdServiceInfo) {
         foundServiceName = serviceInfo.serviceName
+        JdwpDebugLog.d("service found: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             nsdManager.registerServiceInfoCallback(serviceInfo, { it.run() }, object : ServiceInfoCallback {
                 override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
+                    JdwpDebugLog.w("serviceInfo callback registration failed (errorCode=$errorCode)")
                 }
 
                 override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
-                    onResolved(serviceInfo.hostAddresses.firstOrNull()?.hostAddress ?: "127.0.0.1", serviceInfo.port)
+                    val host = serviceInfo.hostAddresses.firstOrNull()?.hostAddress ?: "127.0.0.1"
+                    JdwpDebugLog.d("resolved (14+): $host:${serviceInfo.port}")
+                    onResolved(host, serviceInfo.port)
                     nsdManager.unregisterServiceInfoCallback(this)
                 }
 
@@ -78,15 +86,34 @@ class AdbWirelessPortResolver private constructor(private val onLost: () -> Unit
                 }
             })
         } else {
-            nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                }
-
-                override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                    onResolved(serviceInfo.host.hostAddress ?: "127.0.0.1", serviceInfo.port)
-                }
-            })
+            resolveLegacy(serviceInfo, attempt = 0)
         }
+    }
+
+    /**
+     * Legacy resolveService path (Android < 14). NsdManager can only resolve
+     * one service at a time; concurrent resolves fail with errorCode 3
+     * (FAILURE_ALREADY_ACTIVE). Retry a few times with backoff to ride that out.
+     */
+    private fun resolveLegacy(serviceInfo: NsdServiceInfo, attempt: Int) {
+        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                if (errorCode == 3 /* FAILURE_ALREADY_ACTIVE */ && attempt < 8) {
+                    JdwpDebugLog.d("resolve busy (ALREADY_ACTIVE), retry ${attempt + 1} for ${serviceInfo.serviceName}")
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        resolveLegacy(serviceInfo, attempt + 1)
+                    }, 300L)
+                } else {
+                    JdwpDebugLog.w("resolve FAILED for ${serviceInfo.serviceName} (errorCode=$errorCode, attempt=$attempt)")
+                }
+            }
+
+            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                val host = serviceInfo.host?.hostAddress ?: "127.0.0.1"
+                JdwpDebugLog.d("resolved: $host:${serviceInfo.port}")
+                onResolved(host, serviceInfo.port)
+            }
+        })
     }
 
     override fun onServiceLost(serviceInfo: NsdServiceInfo) {
