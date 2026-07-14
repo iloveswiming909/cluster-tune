@@ -133,6 +133,16 @@ class MainActivity : ComponentActivity() {
                                 showWirelessSetup = false
                                 // Connecting there changes availability; re-probe.
                                 viewModel.recheckExecutionAvailability()
+                                // Bring ClusterTune back to fullscreen out of the
+                                // split-screen setup view.
+                                runCatching {
+                                    startActivity(
+                                        android.content.Intent(this@MainActivity, MainActivity::class.java).addFlags(
+                                            android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                                        ),
+                                    )
+                                }
                             },
                         )
                     } else if (showSettings) {

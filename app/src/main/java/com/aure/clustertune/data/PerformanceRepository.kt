@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.transformLatest
@@ -159,11 +160,6 @@ class PerformanceRepository(
                 )
                 val defaultValues = policies.associate { it.id to it.currentMaxFreq }
                 val stockProfile = ProfileStateResolver.buildStockProfile(policies)
-                com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
-                    "state emit: isPServerAvailable=${rootCommandRunner.isAvailable}, " +
-                        "methodId=${rootCommandRunner.selectedExecutionMethodId ?: "null"}, " +
-                        "policies=${policies.size}, profiles=${orderedRealProfiles.size}"
-                )
                 emit(
                     ProfileStateResolver.resolve(
                         TunerState(
@@ -192,6 +188,7 @@ class PerformanceRepository(
                     ),
                 )
             }
+            .distinctUntilChanged()
             .flowOn(Dispatchers.IO)
     }
 

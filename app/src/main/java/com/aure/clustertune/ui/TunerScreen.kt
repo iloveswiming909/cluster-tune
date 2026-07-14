@@ -76,6 +76,8 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -1589,44 +1591,40 @@ private fun CenteredModalSurface(
     heightFraction: Float = 0.86f,
     content: @Composable () -> Unit,
 ) {
-    val outsideInteractionSource = remember { MutableInteractionSource() }
     val surfaceInteractionSource = remember { MutableInteractionSource() }
-    // Capture D-pad/controller focus so navigation stays inside the dialog
-    // instead of leaking to the content behind the scrim.
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
-    }
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.38f))
-            .clickable(
-                interactionSource = outsideInteractionSource,
-                indication = null,
-                onClick = onDismiss,
-            ),
-        contentAlignment = Alignment.Center,
+    // A real Dialog creates its own focus-capturing window, so D-pad/controller
+    // navigation stays inside the dialog instead of leaking to the content
+    // behind it. usePlatformDefaultWidth=false lets us size it ourselves.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+        ),
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(widthFraction)
-                .height(maxHeight * heightFraction)
-                .widthIn(max = maxWidth)
-                .focusRequester(focusRequester)
-                .focusGroup()
-                .clickable(
-                    interactionSource = surfaceInteractionSource,
-                    indication = null,
-                    onClick = {},
-                ),
-            shape = RoundedCornerShape(28.dp),
-            tonalElevation = 6.dp,
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)),
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
         ) {
-            content()
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(widthFraction)
+                    .height(maxHeight * heightFraction)
+                    .widthIn(max = maxWidth)
+                    .clickable(
+                        interactionSource = surfaceInteractionSource,
+                        indication = null,
+                        onClick = {},
+                    ),
+                shape = RoundedCornerShape(28.dp),
+                tonalElevation = 6.dp,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)),
+            ) {
+                content()
+            }
         }
     }
 }

@@ -61,7 +61,7 @@ import kotlinx.coroutines.withContext
  * Split-screen + pairing approach adapted from
  * github.com/wuyr/jdwp-injector-for-android (Apache-2.0).
  */
-private const val MDNS_WAIT_MS = 6000
+private const val MDNS_WAIT_MS = 3000
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +78,15 @@ fun WirelessDebugSetupScreen(
     var pairingCode by remember { mutableStateOf("") }
     var connected by remember { mutableStateOf(connectionManager.connectionInfo != null) }
     var busy by remember { mutableStateOf(false) }
+
+    // Once connected, briefly show success then return to the app automatically
+    // (also brings ClusterTune back to fullscreen out of the split view).
+    LaunchedEffect(connected) {
+        if (connected) {
+            kotlinx.coroutines.delay(900)
+            onBack()
+        }
+    }
 
     // Live diagnostic log: mirror JdwpDebugLog into Compose state via its listener.
     var logLines by remember { mutableStateOf(JdwpDebugLog.snapshot()) }
@@ -156,7 +165,10 @@ fun WirelessDebugSetupScreen(
                     "built-in Wireless debugging. You only need to pair once per boot."
             )
 
-            Text("Status: $status")
+            Text(
+                "Status: $status",
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            )
 
             if (connected) {
                 Text("✓ Ready. ClusterTune can now apply profiles. Return and select a profile.")
