@@ -2,6 +2,7 @@ package com.aure.clustertune.jdwp
 
 import android.content.Context
 import android.util.Log
+import com.wuyr.jdwp_injector.adb.AdbClient
 import com.wuyr.jdwp_injector.adb.AdbWirelessPairing
 import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver
@@ -222,21 +223,22 @@ class WirelessDebugConnectionManager(
         //    broad-but-bounded range in parallel with short timeouts.
         val start = 30000
         val end = 49999
-        val openPorts = java.util.Collections.synchronizedList(mutableListOf<Int>())
+        val openPorts = java.util.concurrent.CopyOnWriteArrayList<Int>()
         val pool = java.util.concurrent.Executors.newFixedThreadPool(64)
+        val futures = ArrayList<java.util.concurrent.Future<*>>()
         try {
-            val tasks = (start..end).map { port ->
-                java.util.concurrent.Callable {
+            for (port in start..end) {
+                val task = Runnable {
                     try {
                         java.net.Socket().use { s ->
                             s.connect(java.net.InetSocketAddress(ip, port), 120)
                             openPorts.add(port)
                         }
                     } catch (_: Throwable) { /* closed */ }
-                    null
                 }
+                futures.add(pool.submit(task))
             }
-            pool.invokeAll(tasks)
+            futures.forEach { runCatching { it.get() } }
         } finally {
             pool.shutdownNow()
         }
@@ -246,7 +248,7 @@ class WirelessDebugConnectionManager(
         //    completes the adb protocol is the connect port.
         for (port in openPorts.sorted()) {
             try {
-                AdbClient.openShell(ip, port, connectTimeout = 3000L, maxRetryCount = 1).use {
+                AdbClient.openShell(ip, port, connectTimeout = 3000L, maxRetryCount = 1).use { _ ->
                     JdwpDebugLog.d("port-scan: adb handshake OK on $ip:$port")
                 }
                 return AdbConnectionInfo(ip, port)
