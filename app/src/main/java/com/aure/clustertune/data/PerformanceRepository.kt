@@ -159,6 +159,11 @@ class PerformanceRepository(
                 )
                 val defaultValues = policies.associate { it.id to it.currentMaxFreq }
                 val stockProfile = ProfileStateResolver.buildStockProfile(policies)
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+                    "state emit: isPServerAvailable=${rootCommandRunner.isAvailable}, " +
+                        "methodId=${rootCommandRunner.selectedExecutionMethodId ?: "null"}, " +
+                        "policies=${policies.size}, profiles=${orderedRealProfiles.size}"
+                )
                 emit(
                     ProfileStateResolver.resolve(
                         TunerState(

@@ -59,6 +59,9 @@ class JdwpInjectionExecutionMethod(
         } else {
             ExecutionProbeResult(isAvailable = true, supportsStdout = false)
         }
+        com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+            "probe(jdwp-inject): conn=${conn?.let { "${it.host}:${it.port}" } ?: "null"} -> available=${result.isAvailable}"
+        )
         cachedProbe = now to result
         return result
     }

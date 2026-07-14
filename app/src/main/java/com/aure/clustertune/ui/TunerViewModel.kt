@@ -375,9 +375,9 @@ class TunerViewModel(
      */
     fun recheckExecutionAvailability() {
         viewModelScope.launch {
-            // forceReprobe clears the cached probe so a freshly-connected
-            // wireless-debug method is picked up.
-            privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("recheckExecutionAvailability: called")
+            val id = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("recheckExecutionAvailability: detected=${id ?: "null"}")
             repository.refreshLiveValues()
         }
     }

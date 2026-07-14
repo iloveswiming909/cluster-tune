@@ -89,12 +89,17 @@ class PrivilegedExecutionResolver(
         cachedProbe = null
         orderedMethods().forEach { method ->
             val probe = method.probe()
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+                "selectBestMethod: ${method.id} available=${probe.isAvailable}"
+            )
             if (probe.isAvailable) {
                 cachedMethod = method
                 cachedProbe = probe
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("selectBestMethod: WINNER=${method.id}")
                 return method
             }
         }
+        com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("selectBestMethod: NONE available")
         return null
     }
 
