@@ -37,6 +37,9 @@ class WirelessDebugConnectionManager(
 
     private var connectResolver: AdbWirelessPortResolver? = null
     private var wirelessConnectResolver: AdbWirelessPortResolver? = null
+
+    private var connectOnConnected: ((AdbConnectionInfo) -> Unit)? = null
+    private var connectOnUnavailable: (() -> Unit)? = null
     private var pairingResolver: AdbWirelessPortResolver? = null
 
     private var pairingHost: String? = null
@@ -55,29 +58,46 @@ class WirelessDebugConnectionManager(
      * Begin discovering the wireless-debugging CONNECT port (device already
      * paired). Calls [onConnected] when a host/port is found.
      */
+    /**
+     * Start connect discovery the way wuyr does: BOTH resolvers, running
+     * continuously, so whenever the _adb-tls-connect._tcp service appears
+     * (which only happens after wireless debugging is fully active/paired) it
+     * gets caught. Callbacks are idempotent — the first successful resolve wins.
+     *
+     * Safe to call repeatedly (e.g. when the screen opens and on each Connect
+     * tap); it won't tear down a discovery that's mid-flight if already running.
+     */
     fun startConnectDiscovery(
         onConnected: (AdbConnectionInfo) -> Unit,
         onUnavailable: () -> Unit = {},
     ) {
-        stopConnectDiscovery()
-        JdwpDebugLog.d("startConnectDiscovery: looking for adb connect port (mDNS)...")
+        // If already discovering, just update the callbacks; don't restart
+        // (restarting is what made us miss the service-appearance window).
+        connectOnConnected = onConnected
+        connectOnUnavailable = onUnavailable
+        if (connectResolver != null || wirelessConnectResolver != null) {
+            JdwpDebugLog.d("startConnectDiscovery: already running; keeping discovery alive")
+            connectionInfo?.let { onConnected(it) }
+            return
+        }
+        JdwpDebugLog.d("startConnectDiscovery: starting continuous discovery (tcp + tls-connect)")
         val handle: (String, Int) -> Unit = { host, port ->
-            val info = AdbConnectionInfo(host, port)
-            connectionInfo = info
-            JdwpDebugLog.d("startConnectDiscovery: CONNECTED $host:$port")
-            onConnected(info)
+            if (connectionInfo == null) {
+                val info = AdbConnectionInfo(host, port)
+                connectionInfo = info
+                JdwpDebugLog.d("startConnectDiscovery: CONNECTED $host:$port")
+                connectOnConnected?.invoke(info)
+            }
         }
         connectResolver = with(appContext) {
+            resolveAdbTcpConnectPort { host, port -> handle(host, port) }
+        }
+        wirelessConnectResolver = with(appContext) {
             resolveAdbWirelessConnectPort(onLost = {
-                JdwpDebugLog.d("startConnectDiscovery: connect port lost/unavailable")
-                onUnavailable()
+                JdwpDebugLog.d("startConnectDiscovery: connect service lost")
+                connectOnUnavailable?.invoke()
             }) { host, port -> handle(host, port) }
         }
-        // Note: we intentionally start ONLY the _adb-tls-connect._tcp discovery.
-        // On Android < 14, NsdManager resolves one service at a time; running a
-        // second discovery (_adb._tcp) concurrently caused resolves to fail with
-        // FAILURE_ALREADY_ACTIVE. The TLS-connect service is the correct one for
-        // a paired device on Android 11+.
     }
 
     /**
@@ -158,5 +178,95 @@ class WirelessDebugConnectionManager(
     fun stopAll() {
         stopConnectDiscovery()
         stopPairingDiscovery()
+    }
+
+    // ---------------------------------------------------------------------
+    //  Fallback: find the adb connect port by scanning the device's own
+    //  Wi-Fi IP. Used when mDNS discovery doesn't surface the connect
+    //  service. No typing, no mDNS. `adb connect <wifiIp>:<port>` is known
+    //  to work, so the port is open on the Wi-Fi interface.
+    // ---------------------------------------------------------------------
+
+    @Volatile
+    private var scanning = false
+
+    /**
+     * Scan the device's Wi-Fi IP for the adb connect port and, if found,
+     * populate [connectionInfo]. Runs off the main thread. [onResult] is
+     * invoked with the connection info on success, or null if not found.
+     */
+    fun scanForConnectPort(onResult: (AdbConnectionInfo?) -> Unit) {
+        if (scanning) return
+        scanning = true
+        Thread {
+            val result = runCatching { doScan() }.getOrNull()
+            scanning = false
+            if (result != null) {
+                connectionInfo = result
+                connectOnConnected?.invoke(result)
+            }
+            onResult(result)
+        }.also { it.isDaemon = true }.start()
+    }
+
+    private fun doScan(): AdbConnectionInfo? {
+        val ip = wifiIpAddress()
+        if (ip == null) {
+            JdwpDebugLog.w("port-scan: could not determine Wi-Fi IP")
+            return null
+        }
+        JdwpDebugLog.d("port-scan: scanning $ip for adb connect port…")
+
+        // 1) Fast pass: find OPEN TCP ports in the adb ephemeral range.
+        //    Android's wireless-adb connect port is a dynamic port; scan a
+        //    broad-but-bounded range in parallel with short timeouts.
+        val start = 30000
+        val end = 49999
+        val openPorts = java.util.Collections.synchronizedList(mutableListOf<Int>())
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(64)
+        try {
+            val tasks = (start..end).map { port ->
+                java.util.concurrent.Callable {
+                    try {
+                        java.net.Socket().use { s ->
+                            s.connect(java.net.InetSocketAddress(ip, port), 120)
+                            openPorts.add(port)
+                        }
+                    } catch (_: Throwable) { /* closed */ }
+                    null
+                }
+            }
+            pool.invokeAll(tasks)
+        } finally {
+            pool.shutdownNow()
+        }
+        JdwpDebugLog.d("port-scan: ${openPorts.size} open port(s): ${openPorts.sorted().joinToString().take(200)}")
+
+        // 2) For each open port, try the actual adb handshake. The one that
+        //    completes the adb protocol is the connect port.
+        for (port in openPorts.sorted()) {
+            try {
+                AdbClient.openShell(ip, port, connectTimeout = 3000L, maxRetryCount = 1).use {
+                    JdwpDebugLog.d("port-scan: adb handshake OK on $ip:$port")
+                }
+                return AdbConnectionInfo(ip, port)
+            } catch (_: Throwable) {
+                // not an adb port; keep looking
+            }
+        }
+        JdwpDebugLog.w("port-scan: no adb connect port found in $start-$end")
+        return null
+    }
+
+    private fun wifiIpAddress(): String? {
+        // Prefer a real (non-loopback) site-local IPv4 address (Wi-Fi).
+        return runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.toList() }
+                .filterIsInstance<java.net.Inet4Address>()
+                .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                ?.hostAddress
+        }.getOrNull()
     }
 }

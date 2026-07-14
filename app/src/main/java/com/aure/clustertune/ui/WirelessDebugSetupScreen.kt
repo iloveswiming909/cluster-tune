@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -86,6 +87,15 @@ fun WirelessDebugSetupScreen(
     DisposableEffect(Unit) {
         devOptionsEnabled = isDevOptionsEnabled(context)
         JdwpDebugLog.d("setup screen opened; devOptions=$devOptionsEnabled")
+        // Start connect discovery immediately and leave it running (wuyr does
+        // this) so _adb-tls-connect._tcp is caught whenever it appears after
+        // wireless debugging becomes active.
+        connectionManager.startConnectDiscovery(
+            onConnected = { info ->
+                connected = true
+                status = "Connected (${info.host}:${info.port}). You're ready."
+            },
+        )
         onDispose { connectionManager.stopAll() }
     }
 
@@ -190,6 +200,29 @@ fun WirelessDebugSetupScreen(
                     ) {
                         Text("Connect")
                     }
+                    Text(
+                        "If Connect keeps searching, use the automatic scan (finds the " +
+                            "port directly, no mDNS):",
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            busy = true
+                            status = "Scanning for the connection… (a few seconds)"
+                            connectionManager.scanForConnectPort { info ->
+                                busy = false
+                                if (info != null) {
+                                    connected = true
+                                    status = "Connected (${info.host}:${info.port}). You're ready."
+                                } else {
+                                    status = "Scan didn't find it. Make sure Wireless debugging is ON."
+                                }
+                            }
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Auto-scan for connection")
+                    }
 
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -257,9 +290,17 @@ fun WirelessDebugSetupScreen(
             Spacer(Modifier.height(12.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
+                    val clipboard = LocalClipboardManager.current
                     Row2(
                         left = { Text("Diagnostic log", style = MaterialTheme.typography.titleSmall) },
-                        right = { TextButton(onClick = { JdwpDebugLog.clear() }) { Text("Clear") } },
+                        right = {
+                            androidx.compose.foundation.layout.Row {
+                                TextButton(onClick = {
+                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(logLines.joinToString("\n")))
+                                }) { Text("Copy") }
+                                TextButton(onClick = { JdwpDebugLog.clear() }) { Text("Clear") }
+                            }
+                        },
                     )
                     val logText = logLines.joinToString("\n").ifEmpty { "(no log yet)" }
                     Text(
@@ -324,10 +365,13 @@ private fun openWirelessDebugging(context: Context) {
  * so the system pairing dialog stays visible while the user types the code.
  */
 private fun openAdjacent(context: Context, intent: Intent) {
+    // Match wuyr's flags exactly: LAUNCH_ADJACENT | MULTIPLE_TASK | CLEAR_TASK
+    // (no NEW_TASK). Launching from the Activity context this way tends to keep
+    // ClusterTune in the primary (left) slot and Settings in the adjacent slot.
     intent.addFlags(
-        Intent.FLAG_ACTIVITY_NEW_TASK or
-            Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-            Intent.FLAG_ACTIVITY_MULTIPLE_TASK,
+        Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
+            Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+            Intent.FLAG_ACTIVITY_CLEAR_TASK,
     )
     val options = Bundle().apply { putInt("android.activity.windowingMode", 3) }
     runCatching { context.startActivity(intent, options) }
