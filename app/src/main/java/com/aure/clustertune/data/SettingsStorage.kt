@@ -69,7 +69,7 @@ class SettingsStorage(private val context: Context) {
             includePrereleaseUpdates = preferences[includePrereleaseUpdatesKey] ?: false,
             lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
             displayFrequenciesAsPercent = preferences[displayFrequenciesAsPercentKey] ?: false,
-            profileSwitchToastsEnabled = preferences[profileSwitchToastsEnabledKey] ?: true,
+            profileSwitchToastsEnabled = preferences[profileSwitchToastsEnabledKey] ?: false,
             profileSwitchHistoryLimit = (preferences[profileSwitchHistoryLimitKey]
                 ?: DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT)
                 .coerceIn(MIN_PROFILE_SWITCH_HISTORY_LIMIT, MAX_PROFILE_SWITCH_HISTORY_LIMIT),

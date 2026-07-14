@@ -27,7 +27,7 @@ data class AppSettings(
     val includePrereleaseUpdates: Boolean = false,
     val lastUpdateCheckMillis: Long = 0L,
     val displayFrequenciesAsPercent: Boolean = false,
-    val profileSwitchToastsEnabled: Boolean = true,
+    val profileSwitchToastsEnabled: Boolean = false,
     val profileSwitchHistoryLimit: Int = DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT,
     val privilegedExecutionMethodId: String? = null,
 )

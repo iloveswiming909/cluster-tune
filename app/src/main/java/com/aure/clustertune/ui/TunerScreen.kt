@@ -1604,6 +1604,15 @@ private fun CenteredModalSurface(
             dismissOnBackPress = true,
         ),
     ) {
+        // Give the dialog an initial focus target so D-pad/controller input can
+        // navigate WITHIN it. Without this, a freshly-opened Compose dialog has
+        // nothing focused and the controller appears to do nothing.
+        val focusRequester = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            // Small delay lets the dialog content compose before we grab focus.
+            kotlinx.coroutines.delay(50)
+            runCatching { focusRequester.requestFocus() }
+        }
         BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
@@ -1613,6 +1622,8 @@ private fun CenteredModalSurface(
                     .fillMaxWidth(widthFraction)
                     .height(maxHeight * heightFraction)
                     .widthIn(max = maxWidth)
+                    .focusRequester(focusRequester)
+                    .focusGroup()
                     .clickable(
                         interactionSource = surfaceInteractionSource,
                         indication = null,
