@@ -35,6 +35,10 @@ class PrivilegedExecutionResolver(
 ) {
     private var cachedMethod: PrivilegedExecutionMethod? = null
     private var cachedProbe: ExecutionProbeResult? = null
+    // Timestamp of the last full probe sweep. Used to cache the "nothing
+    // available" result too, so repeated isAvailable reads (every recomposition
+    // / state emission) don't re-probe all methods dozens of times a second.
+    private var lastProbeAtMs: Long = 0L
     @Volatile
     private var configuredMethodId: String? = null
 
@@ -52,6 +56,7 @@ class PrivilegedExecutionResolver(
         configuredMethodId = methodId
         cachedMethod = null
         cachedProbe = null
+        lastProbeAtMs = 0L
     }
 
     fun autoDetectBestMethod(forceReprobe: Boolean = true): String? {
@@ -63,6 +68,11 @@ class PrivilegedExecutionResolver(
     fun selectedMethod(forceReprobe: Boolean = false): PrivilegedExecutionMethod? {
         if (!forceReprobe) {
             cachedMethod?.let { return it }
+            // Cache the negative result too, briefly, to avoid re-probing every
+            // read when nothing is available.
+            if (System.currentTimeMillis() - lastProbeAtMs < NEGATIVE_CACHE_MS) {
+                return null
+            }
         }
         cachedMethod = null
         cachedProbe = null
@@ -87,6 +97,7 @@ class PrivilegedExecutionResolver(
         }
         cachedMethod = null
         cachedProbe = null
+        lastProbeAtMs = System.currentTimeMillis()
         orderedMethods().forEach { method ->
             val probe = method.probe()
             com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
@@ -127,6 +138,10 @@ class PrivilegedExecutionResolver(
     }
 
     companion object {
+        // How long a "nothing available" result is cached before re-probing,
+        // to prevent constant re-probing on every isAvailable read.
+        private const val NEGATIVE_CACHE_MS = 3000L
+
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",
             "pserver-noout",

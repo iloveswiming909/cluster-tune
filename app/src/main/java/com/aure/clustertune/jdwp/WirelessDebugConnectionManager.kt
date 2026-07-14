@@ -26,11 +26,23 @@ import com.wuyr.jdwp_injector.adb.AdbWirelessPortResolver.Companion.resolveAdbWi
  *      pair(code, ...) with the 6-digit code shown under Wireless debugging.
  *   3. On success, [connectionInfo] is populated and injection can run.
  */
-class WirelessDebugConnectionManager(
+class WirelessDebugConnectionManager private constructor(
     context: Context,
 ) {
 
     private val appContext = context.applicationContext
+
+    companion object {
+        @Volatile
+        private var INSTANCE: WirelessDebugConnectionManager? = null
+
+        /** Process-wide singleton, shared across all AppContainer instances. */
+        fun getInstance(context: Context): WirelessDebugConnectionManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: WirelessDebugConnectionManager(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
 
     @Volatile
     var connectionInfo: AdbConnectionInfo? = null
@@ -161,10 +173,6 @@ class WirelessDebugConnectionManager(
             pairingInProgressOrDone = false
             onError(it)
         }
-    }
-
-    private companion object {
-        const val TAG = "ClusterTuneJdwpConn"
     }
 
     fun stopConnectDiscovery() {

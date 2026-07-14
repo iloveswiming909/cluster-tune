@@ -26,10 +26,14 @@ class AppContainer(context: Context) {
      * Holds the on-device wireless-debugging connection used by the no-root
      * JDWP injection execution method. Populated by the wireless-debugging
      * setup UI (pairing + port discovery).
+     *
+     * MUST be a process-wide singleton: AppContainer is instantiated in several
+     * places (MainActivity, services, receivers), and the setup screen writes
+     * the connection into ONE instance while the execution method's resolver
+     * reads it from another. Sharing a single manager fixes that mismatch.
      */
-    val wirelessDebugConnectionManager: WirelessDebugConnectionManager by lazy {
-        WirelessDebugConnectionManager(appContext)
-    }
+    val wirelessDebugConnectionManager: WirelessDebugConnectionManager
+        get() = WirelessDebugConnectionManager.getInstance(appContext)
 
     val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
         PrivilegedExecutionResolver.default(
