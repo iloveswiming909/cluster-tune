@@ -39,6 +39,8 @@ class AppContainer(context: Context) {
         PrivilegedExecutionResolver.default(
             appContext,
             jdwpConnectionProvider = wirelessDebugConnectionManager.provider(),
+            jdwpSharedShellProvider = { wirelessDebugConnectionManager.sharedShell() },
+            jdwpShellInvalidator = { wirelessDebugConnectionManager.invalidateShell() },
         )
     }
 

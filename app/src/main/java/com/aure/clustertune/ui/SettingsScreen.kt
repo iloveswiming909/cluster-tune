@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -721,39 +722,22 @@ private fun ExecutionMethodSelectionDialog(
             }
         },
         text = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    executionMethodInfo.take(3).forEach { info ->
-                        ExecutionMethodOptionRow(
-                            info = info,
-                            selected = selectedMethodId == info.id,
-                            onClick = {
-                                onChange(info.id)
-                                onDismiss()
-                            },
-                        )
-                    }
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    executionMethodInfo.drop(3).forEach { info ->
-                        ExecutionMethodOptionRow(
-                            info = info,
-                            selected = selectedMethodId == info.id,
-                            onClick = {
-                                onChange(info.id)
-                                onDismiss()
-                            },
-                        )
-                    }
+                executionMethodInfo.forEach { info ->
+                    ExecutionMethodOptionRow(
+                        info = info,
+                        selected = selectedMethodId == info.id,
+                        onClick = {
+                            onChange(info.id)
+                            onDismiss()
+                        },
+                    )
                 }
             }
         },

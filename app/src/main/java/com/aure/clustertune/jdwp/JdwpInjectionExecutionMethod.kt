@@ -34,6 +34,8 @@ import java.io.File
  */
 class JdwpInjectionExecutionMethod(
     private val connectionProvider: () -> AdbConnectionInfo?,
+    private val sharedShellProvider: (() -> AdbClient?)? = null,
+    private val shellInvalidator: (() -> Unit)? = null,
     private val targetPackage: String = GAME_ASSISTANT_PKG,
     private val sharedDir: File = defaultSharedDir(),
 ) : PrivilegedExecutionMethod {
@@ -80,15 +82,28 @@ class JdwpInjectionExecutionMethod(
         return runCatching {
             val scriptPath = stageScript(scriptName, scriptContents)
             Log.d(TAG, "executeScript: staged '$scriptName' -> $scriptPath (${scriptContents.length} bytes)")
-            AdbClient.openShell(conn.host, conn.port).use { adb ->
-                val pid = findTargetPid(adb)
+            // Reuse the persistent shell connection when available (avoids a new
+            // adb transport -> avoids the repeated "connected" heads-up).
+            val shell = sharedShellProvider?.invoke()
+            if (shell != null) {
+                val pid = findTargetPid(shell)
                 if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
-                Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid")
-                injectExec(conn, adb, "sh ${scriptPath}")
-                Log.d(TAG, "executeScript: injection dispatched OK")
+                Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid (shared shell)")
+                injectExec(conn, shell, "sh ${scriptPath}")
+            } else {
+                AdbClient.openShell(conn.host, conn.port).use { adb ->
+                    val pid = findTargetPid(adb)
+                    if (pid <= 0) throw IllegalStateException("GameAssistant is not running")
+                    Log.d(TAG, "executeScript: injecting into GameAssistant pid=$pid (temp shell)")
+                    injectExec(conn, adb, "sh ${scriptPath}")
+                }
             }
+            Log.d(TAG, "executeScript: injection dispatched OK")
             null
-        }.onFailure { Log.w(TAG, "executeScript: FAILED", it) }
+        }.onFailure {
+            Log.w(TAG, "executeScript: FAILED", it)
+            shellInvalidator?.invoke()
+        }
     }
 
     /**

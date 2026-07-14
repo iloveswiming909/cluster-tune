@@ -61,6 +61,8 @@ import kotlinx.coroutines.withContext
  * Split-screen + pairing approach adapted from
  * github.com/wuyr/jdwp-injector-for-android (Apache-2.0).
  */
+private const val MDNS_WAIT_MS = 6000
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WirelessDebugSetupScreen(
@@ -195,33 +197,38 @@ fun WirelessDebugSetupScreen(
                     Spacer(Modifier.height(4.dp))
                     Text("2. Already paired this boot? Just tap Connect:")
                     OutlinedButton(
-                        onClick = { startConnect() },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Connect")
-                    }
-                    Text(
-                        "If Connect keeps searching, use the automatic scan (finds the " +
-                            "port directly, no mDNS):",
-                    )
-                    OutlinedButton(
                         onClick = {
                             busy = true
-                            status = "Scanning for the connection… (a few seconds)"
-                            connectionManager.scanForConnectPort { info ->
-                                busy = false
-                                if (info != null) {
-                                    connected = true
-                                    status = "Connected (${info.host}:${info.port}). You're ready."
+                            status = "Connecting…"
+                            // Try mDNS first; if it doesn't resolve within a few
+                            // seconds, fall back to the port-scan automatically.
+                            startConnect()
+                            scope.launch {
+                                var waited = 0
+                                while (waited < MDNS_WAIT_MS && !connected) {
+                                    kotlinx.coroutines.delay(500)
+                                    waited += 500
+                                }
+                                if (!connected) {
+                                    status = "mDNS didn't respond; scanning directly…"
+                                    connectionManager.scanForConnectPort { info ->
+                                        busy = false
+                                        if (info != null) {
+                                            connected = true
+                                            status = "Connected (${info.host}:${info.port}). You're ready."
+                                        } else {
+                                            status = "Couldn't connect. Make sure Wireless debugging is ON."
+                                        }
+                                    }
                                 } else {
-                                    status = "Scan didn't find it. Make sure Wireless debugging is ON."
+                                    busy = false
                                 }
                             }
                         },
                         enabled = !busy,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Auto-scan for connection")
+                        Text(if (busy) "Connecting…" else "Connect")
                     }
 
                     Spacer(Modifier.height(4.dp))

@@ -76,6 +76,9 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -1588,6 +1591,12 @@ private fun CenteredModalSurface(
 ) {
     val outsideInteractionSource = remember { MutableInteractionSource() }
     val surfaceInteractionSource = remember { MutableInteractionSource() }
+    // Capture D-pad/controller focus so navigation stays inside the dialog
+    // instead of leaking to the content behind the scrim.
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -1605,6 +1614,8 @@ private fun CenteredModalSurface(
                 .fillMaxWidth(widthFraction)
                 .height(maxHeight * heightFraction)
                 .widthIn(max = maxWidth)
+                .focusRequester(focusRequester)
+                .focusGroup()
                 .clickable(
                     interactionSource = surfaceInteractionSource,
                     indication = null,

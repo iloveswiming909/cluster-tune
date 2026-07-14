@@ -1,5 +1,6 @@
 package com.aure.clustertune
 
+import androidx.compose.ui.graphics.Color
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -114,7 +115,9 @@ class TileControlActivity : ComponentActivity() {
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
             ClusterTuneTheme(settings = settings) {
-                Surface {
+                // Transparent container so the floating dialog window shows the
+                // picker as a popup (not a full black screen).
+                Surface(color = Color.Transparent) {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
                     CompactProfilePickerScreen(
                         state = state,

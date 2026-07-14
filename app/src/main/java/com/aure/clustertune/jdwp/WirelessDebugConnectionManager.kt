@@ -48,6 +48,43 @@ class WirelessDebugConnectionManager private constructor(
     var connectionInfo: AdbConnectionInfo? = null
         private set
 
+    // A persistent shell connection reused across profile applies. Opening a
+    // fresh adb connection every apply makes Android pop the "wireless
+    // debugging connected" heads-up each time; reusing one connection avoids
+    // that repeated pop-up (and the overhead).
+    @Volatile
+    private var persistentShell: AdbClient? = null
+    private val shellLock = Any()
+
+    /**
+     * Returns a live shell [AdbClient], reusing the persistent one if healthy,
+     * otherwise (re)opening it. Returns null if not connected.
+     */
+    fun sharedShell(): AdbClient? {
+        val conn = connectionInfo ?: return null
+        synchronized(shellLock) {
+            val existing = persistentShell
+            if (existing != null) {
+                // Verify it still works with a cheap command; reopen if not.
+                val ok = runCatching { existing.sendShellCommand("true") }.isSuccess
+                if (ok) return existing
+                runCatching { existing.close() }
+                persistentShell = null
+            }
+            return runCatching {
+                AdbClient.openShell(conn.host, conn.port).also { persistentShell = it }
+            }.getOrNull()
+        }
+    }
+
+    /** Drop the persistent shell (e.g. after a failure or disconnect). */
+    fun invalidateShell() {
+        synchronized(shellLock) {
+            runCatching { persistentShell?.close() }
+            persistentShell = null
+        }
+    }
+
     private var connectResolver: AdbWirelessPortResolver? = null
     private var wirelessConnectResolver: AdbWirelessPortResolver? = null
 

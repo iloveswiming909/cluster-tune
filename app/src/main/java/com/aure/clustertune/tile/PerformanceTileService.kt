@@ -159,9 +159,12 @@ class PerformanceTileService : TileService() {
     }
 
     private fun handleTap() {
+        val t0 = System.currentTimeMillis()
+        com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("tile: handleTap start")
         runCatching {
             val container = AppContainer(applicationContext)
             val settings = runBlocking { container.settingsStorage.settings.first() }
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("tile: settings read in ${System.currentTimeMillis() - t0}ms, behavior=${settings.tileTapBehavior}")
             when (settings.tileTapBehavior) {
                 TileInteractionBehavior.SHOW_DIALOG -> {
                     if (OverlayPermission.canDrawOverlays(applicationContext)) {
