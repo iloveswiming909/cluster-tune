@@ -62,8 +62,6 @@ import kotlinx.coroutines.withContext
  * Split-screen + pairing approach adapted from
  * github.com/wuyr/jdwp-injector-for-android (Apache-2.0).
  */
-private const val MDNS_WAIT_MS = 3000
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WirelessDebugSetupScreen(
@@ -123,6 +121,29 @@ fun WirelessDebugSetupScreen(
                 status = "Wireless debugging not found yet. Make sure it's ON, then pair below."
             },
         )
+        // mDNS connect discovery is unreliable on some networks, so if it hasn't
+        // resolved within 3 seconds, fall back to the direct port scan (the
+        // reliable path). Every caller of startConnect() — including the
+        // automatic connect after a successful pairing — gets this fallback.
+        scope.launch {
+            var waited = 0
+            while (waited < 3000 && !connected) {
+                kotlinx.coroutines.delay(500)
+                waited += 500
+            }
+            if (!connected) {
+                JdwpDebugLog.d("startConnect(): mDNS timed out; falling back to port scan")
+                status = "mDNS didn't respond; scanning directly…"
+                connectionManager.scanForConnectPort { info ->
+                    if (info != null) {
+                        connected = true
+                        status = "Connected (${info.host}:${info.port}). You're ready."
+                    } else {
+                        status = "Couldn't connect. Make sure Wireless debugging is ON."
+                    }
+                }
+            }
+        }
     }
 
     fun startPairing() {
@@ -208,46 +229,10 @@ fun WirelessDebugSetupScreen(
                     }
 
                     Spacer(Modifier.height(4.dp))
-                    Text("2. Already paired this boot? Just tap Connect:")
-                    OutlinedButton(
-                        onClick = {
-                            busy = true
-                            status = "Connecting…"
-                            // Try mDNS first; if it doesn't resolve within a few
-                            // seconds, fall back to the port-scan automatically.
-                            startConnect()
-                            scope.launch {
-                                var waited = 0
-                                while (waited < MDNS_WAIT_MS && !connected) {
-                                    kotlinx.coroutines.delay(500)
-                                    waited += 500
-                                }
-                                if (!connected) {
-                                    status = "mDNS didn't respond; scanning directly…"
-                                    connectionManager.scanForConnectPort { info ->
-                                        busy = false
-                                        if (info != null) {
-                                            connected = true
-                                            status = "Connected (${info.host}:${info.port}). You're ready."
-                                        } else {
-                                            status = "Couldn't connect. Make sure Wireless debugging is ON."
-                                        }
-                                    }
-                                } else {
-                                    busy = false
-                                }
-                            }
-                        },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().focusHighlight(),
-                    ) {
-                        Text(if (busy) "Connecting…" else "Connect")
-                    }
-
-                    Spacer(Modifier.height(4.dp))
                     Text(
-                        "3. First time on this boot? In the system pane tap 'Pair device with " +
-                            "pairing code', then tap Start pairing:",
+                        "2. First time on this boot? In the system pane tap 'Pair device with " +
+                            "pairing code', then tap Start pairing. ClusterTune connects " +
+                            "automatically once pairing succeeds:",
                     )
                     OutlinedButton(
                         onClick = { startPairing() },

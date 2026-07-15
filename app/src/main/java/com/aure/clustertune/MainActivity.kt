@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -144,6 +145,54 @@ class MainActivity : ComponentActivity() {
                     var showSettings by rememberSaveable { mutableStateOf(false) }
                     var showWirelessSetup by rememberSaveable { mutableStateOf(false) }
                     var overlayPermissionRefresh by remember { mutableStateOf(0) }
+
+                    // Wireless-debug connect state surfaced on the main menu so a
+                    // device already paired this boot can reconnect without opening
+                    // the setup screen.
+                    val cm = container.wirelessDebugConnectionManager
+                    var wirelessConnectStatus by remember {
+                        mutableStateOf(if (cm.connectionInfo != null) "Connected. Ready to apply profiles." else "Not connected")
+                    }
+                    var isWirelessDebugConnected by remember { mutableStateOf(cm.connectionInfo != null) }
+                    val onConnectWirelessDebug: () -> Unit = {
+                        wirelessConnectStatus = "Looking for wireless debugging…"
+                        // Try mDNS discovery first; if it doesn't resolve within a
+                        // few seconds, fall back to the port scan (the reliable path
+                        // on this network). Mirrors the old setup-screen Connect.
+                        cm.startConnectDiscovery(
+                            onConnected = { info ->
+                                isWirelessDebugConnected = true
+                                wirelessConnectStatus = "Connected (${info.host}:${info.port}). Ready to apply profiles."
+                                viewModel.recheckExecutionAvailability()
+                            },
+                            onUnavailable = {
+                                wirelessConnectStatus =
+                                    "Wireless debugging not found. Make sure it's ON, then use Set up to pair."
+                            },
+                        )
+                        lifecycleScope.launch {
+                            var waited = 0
+                            while (waited < 3000 && !isWirelessDebugConnected) {
+                                kotlinx.coroutines.delay(500)
+                                waited += 500
+                            }
+                            if (!isWirelessDebugConnected) {
+                                wirelessConnectStatus = "mDNS didn't respond; scanning directly…"
+                                cm.scanForConnectPort { info ->
+                                    if (info != null) {
+                                        isWirelessDebugConnected = true
+                                        wirelessConnectStatus =
+                                            "Connected (${info.host}:${info.port}). Ready to apply profiles."
+                                        viewModel.recheckExecutionAvailability()
+                                    } else {
+                                        wirelessConnectStatus =
+                                            "Couldn't connect. Make sure Wireless debugging is ON, or use Set up to pair."
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     DisposableEffect(Unit) {
                         val observer = LifecycleEventObserver { _, event ->
                             if (event == Lifecycle.Event.ON_RESUME) {
@@ -158,6 +207,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     if (showWirelessSetup) {
+                        // Hardware / controller B (back) should return to the main
+                        // menu, not exit the app. Without this handler the event
+                        // falls through to the activity default (finish).
+                        BackHandler(enabled = true) {
+                            showWirelessSetup = false
+                            viewModel.recheckExecutionAvailability()
+                        }
                         WirelessDebugSetupScreen(
                             connectionManager = container.wirelessDebugConnectionManager,
                             onBack = {
@@ -167,6 +223,7 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     } else if (showSettings) {
+                        BackHandler(enabled = true) { showSettings = false }
                         SettingsScreen(
                             settings = settings,
                             onBack = { showSettings = false },
@@ -246,6 +303,9 @@ class MainActivity : ComponentActivity() {
                             onRefreshInstalledApps = viewModel::refreshInstalledApps,
                             onOpenSettings = { showSettings = true },
                             onOpenWirelessDebugSetup = { showWirelessSetup = true },
+                            onConnectWirelessDebug = onConnectWirelessDebug,
+                            wirelessConnectStatus = wirelessConnectStatus,
+                            isWirelessDebugConnected = isWirelessDebugConnected,
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,
                             onErrorMessageShown = viewModel::consumeErrorMessage,

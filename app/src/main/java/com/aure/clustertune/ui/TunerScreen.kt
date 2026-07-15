@@ -6,6 +6,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -164,6 +165,9 @@ fun MainTunerScreen(
     onRefreshInstalledApps: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenWirelessDebugSetup: () -> Unit,
+    onConnectWirelessDebug: () -> Unit,
+    wirelessConnectStatus: String,
+    isWirelessDebugConnected: Boolean,
     onRefreshLiveValues: () -> Unit,
     onStatusMessageShown: () -> Unit,
     onErrorMessageShown: () -> Unit,
@@ -245,8 +249,26 @@ fun MainTunerScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            Text(
+                                text = "Status: $wirelessConnectStatus",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isWirelessDebugConnected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            )
                             Button(onClick = onOpenWirelessDebugSetup) {
                                 Text("Set up wireless debugging (no root)")
+                            }
+                            Text(
+                                text = "Already paired this boot? Just tap Connect:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(onClick = onConnectWirelessDebug) {
+                                Text("Connect")
                             }
                         }
                     } else {
@@ -1623,6 +1645,11 @@ private fun CenteredModalSurface(
             dismissOnBackPress = true,
         ),
     ) {
+        // A single Back/B press closes the whole dialog. BackHandler catches the
+        // system BACK key (which most controllers' B button maps to); the
+        // onPreviewKeyEvent below additionally catches controllers that report a
+        // distinct ButtonB. Together this guarantees one press dismisses.
+        BackHandler(enabled = true) { onDismiss() }
         BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
@@ -1655,6 +1682,14 @@ private fun CenteredModalSurface(
                 // applied BEFORE focusGroup.
                 Box(
                     modifier = Modifier
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonB) {
+                                onDismiss()
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         .focusRestorer()
                         .focusGroup(),
                 ) {
@@ -1796,31 +1831,47 @@ private fun ProfileChoiceRow(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
-    val containerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f)
-    val containerBrush = if (selected) {
-        Brush.horizontalGradient(
-            listOf(
-                colorScheme.primaryContainer.copy(alpha = 0.24f),
-                colorScheme.surfaceContainerHigh.copy(alpha = 0.56f),
-            ),
-        )
+    val interactionSource = remember { MutableInteractionSource() }
+    var focused by remember { mutableStateOf(false) }
+
+    // System-color surfaces so the picker matches the rest of the app instead of
+    // the muddy semi-transparent grey it used before. Selected rows get the same
+    // translucent primary fill as the main-menu profile rows; the focused row
+    // gets a dark high-contrast outline.
+    val containerColor = if (selected) {
+        colorScheme.primaryContainer.copy(alpha = 0.30f)
     } else {
-        Brush.horizontalGradient(listOf(containerColor, containerColor))
+        colorScheme.surfaceContainerHigh
     }
-    val borderColor = if (selected) {
-        colorScheme.primary.copy(alpha = 0.82f)
-    } else {
-        colorScheme.outlineVariant.copy(alpha = 0.28f)
+    val borderColor = when {
+        focused -> DarkFocusHighlight
+        selected -> colorScheme.primary
+        else -> colorScheme.outlineVariant
     }
-    val titleColor = if (selected) borderColor else colorScheme.onSurface
+    val borderWidth = if (focused || selected) 2.dp else 1.dp
+    val titleColor = if (selected) colorScheme.primary else colorScheme.onSurface
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
-            .focusHighlight(shape = rowShape, focusRequester = focusRequester)
-            .background(containerBrush, rowShape)
-            .border(BorderStroke(1.dp, borderColor), rowShape)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown &&
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter ||
+                        event.key == Key.NumPadEnter || event.key == Key.Spacebar ||
+                        event.key == Key.ButtonA)
+                ) {
+                    onClick()
+                    true
+                } else {
+                    false
+                }
+            }
+            .focusable(interactionSource = interactionSource)
+            .background(containerColor, rowShape)
+            .border(BorderStroke(borderWidth, borderColor), rowShape)
             .clip(rowShape)
             .clickable(onClick = onClick)
             .padding(
@@ -2499,22 +2550,9 @@ private fun ProfileEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (!manualMode) {
-                    OutlinedTextField(
+                    ProfileNameField(
                         value = profileName,
                         onValueChange = { profileName = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 62.dp),
-                        singleLine = true,
-                        label = { Text("Profile name") },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
-                            unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
-                            focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                            unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                            cursorColor = colorScheme.primary,
-                        ),
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2632,6 +2670,114 @@ private fun EmptyState(state: TunerState) {
     }
 }
 
+/**
+ * Profile-name field with a controller-friendly "hover" state. When navigating
+ * by D-pad the field is a plain focusable row (dark focus border, no keyboard),
+ * so you can pass over it and move back down to the sliders. Pressing A/Center
+ * (or tapping) enters edit mode: the real text field takes focus and the soft
+ * keyboard opens. Back / focus-loss commits the text and returns to hover.
+ * Previously the OutlinedTextField grabbed focus directly, which force-opened
+ * the keyboard and trapped D-pad focus.
+ */
+@Composable
+private fun ProfileNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(20.dp)
+    var editing by remember { mutableStateOf(false) }
+    var hoverFocused by remember { mutableStateOf(false) }
+    val editFocus = remember { FocusRequester() }
+
+    if (editing) {
+        var everFocused by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            runCatching { editFocus.requestFocus() }
+        }
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 62.dp)
+                .focusRequester(editFocus)
+                .onFocusChanged {
+                    if (it.isFocused) {
+                        everFocused = true
+                    } else if (everFocused) {
+                        // Only leave edit mode once focus was actually acquired and
+                        // then lost (tapping away / closing keyboard), not during
+                        // the initial frame before requestFocus() resolves.
+                        editing = false
+                    }
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        (event.key == Key.Back || event.key == Key.ButtonB ||
+                            event.key == Key.Enter || event.key == Key.NumPadEnter)
+                    ) {
+                        editing = false
+                        true
+                    } else {
+                        false
+                    }
+                },
+            singleLine = true,
+            label = { Text("Profile name") },
+            shape = shape,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
+                unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
+                focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                cursorColor = colorScheme.primary,
+            ),
+        )
+    } else {
+        val borderColor = if (hoverFocused) DarkFocusHighlight else colorScheme.outlineVariant.copy(alpha = 0.28f)
+        val borderWidth = if (hoverFocused) 2.dp else 1.dp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 62.dp)
+                .onFocusChanged { hoverFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        (event.key == Key.DirectionCenter || event.key == Key.Enter ||
+                            event.key == Key.NumPadEnter || event.key == Key.Spacebar ||
+                            event.key == Key.ButtonA)
+                    ) {
+                        editing = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .focusable()
+                .clickable { editing = true }
+                .background(colorScheme.surfaceContainerHigh.copy(alpha = 0.46f), shape)
+                .border(BorderStroke(borderWidth, borderColor), shape)
+                .clip(shape)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "Profile name",
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.84f),
+            )
+            Text(
+                text = value.ifEmpty { "Tap or press to edit" },
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (value.isEmpty()) colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 @Composable
 private fun PolicyCard(
     policy: CpuPolicyInfo,
@@ -2699,9 +2845,10 @@ private fun PolicyCard(
                         adjusting = !adjusting
                         true
                     }
-                    Key.Back, Key.ButtonB, Key.Escape -> {
-                        if (adjusting) { adjusting = false; true } else false
-                    }
+                    // B / Back is intentionally NOT consumed here. It falls through
+                    // to the dialog-level BackHandler so a single press closes the
+                    // whole editor (previously B only dropped out of adjust mode,
+                    // forcing a second press to actually dismiss).
                     Key.DirectionLeft -> if (adjusting) { step(-1); true } else false
                     Key.DirectionRight -> if (adjusting) { step(1); true } else false
                     else -> false
