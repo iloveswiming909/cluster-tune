@@ -3,6 +3,7 @@ package com.aure.clustertune.ui
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,36 +19,30 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * A dark, high-contrast border used for focus indication. The app's [primary]
- * accent is a light beige on the Odin's dynamic-color scheme, so a beige border
- * on a beige surface was nearly invisible. A near-black outline reads clearly on
- * top of the light surfaces regardless of the accent color.
- */
-val DarkFocusHighlight: Color = Color(0xFF101010)
-
-/**
- * Adds a clearly visible focus indication (bright border + slight scale) when a
- * component gains D-pad/controller focus. Without this, focused elements are
- * hard to distinguish — which is both a controller-navigation problem and the
- * reason light/beige buttons "don't change enough when highlighted".
+ * Adds a clearly visible focus indication (beige primary border + slight scale)
+ * when a component gains D-pad/controller focus. The rows/buttons this is applied
+ * to sit on dark surfaces, so the app's beige [primary] accent reads clearly as a
+ * border while still matching the rest of the UI. Pass [highlightColor] to
+ * override; pass null to use the theme primary.
  *
  * Pass [focusRequester] to make this element an initial-focus target (call
  * requestFocus() on it when the screen/dialog opens).
  */
 fun Modifier.focusHighlight(
-    highlightColor: Color = DarkFocusHighlight,
+    highlightColor: Color? = null,
     shape: RoundedCornerShape = RoundedCornerShape(20.dp),
     borderWidth: Dp = 3.dp,
     focusedScale: Float = 1.03f,
     focusRequester: FocusRequester? = null,
 ): Modifier = composed {
+    val resolvedColor = highlightColor ?: MaterialTheme.colorScheme.primary
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) focusedScale else 1f, label = "focusScale")
     this
         .scale(scale)
         .border(
             width = if (focused) borderWidth else 0.dp,
-            color = if (focused) highlightColor else Color.Transparent,
+            color = if (focused) resolvedColor else Color.Transparent,
             shape = shape,
         )
         .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)

@@ -7,6 +7,7 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -108,6 +109,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -1834,27 +1836,35 @@ private fun ProfileChoiceRow(
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
 
-    // System-color surfaces so the picker matches the rest of the app instead of
-    // the muddy semi-transparent grey it used before. Selected rows get the same
-    // translucent primary fill as the main-menu profile rows; the focused row
-    // gets a dark high-contrast outline.
-    val containerColor = if (selected) {
-        colorScheme.primaryContainer.copy(alpha = 0.30f)
+    // Beige, system-color surfaces matching the main-menu profile rows and the
+    // customize dialog. Selected rows get the translucent primary-container fill;
+    // focus is shown with the app's beige primary outline (never a black border),
+    // plus a subtle scale-up so it animates the way the old rows did.
+    val containerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f)
+    val containerBrush = if (selected) {
+        Brush.horizontalGradient(
+            listOf(
+                colorScheme.primaryContainer.copy(alpha = 0.24f),
+                colorScheme.surfaceContainerHigh.copy(alpha = 0.56f),
+            ),
+        )
     } else {
-        colorScheme.surfaceContainerHigh
+        Brush.horizontalGradient(listOf(containerColor, containerColor))
     }
     val borderColor = when {
-        focused -> DarkFocusHighlight
-        selected -> colorScheme.primary
-        else -> colorScheme.outlineVariant
+        focused -> colorScheme.primary
+        selected -> colorScheme.primary.copy(alpha = 0.82f)
+        else -> colorScheme.outlineVariant.copy(alpha = 0.28f)
     }
     val borderWidth = if (focused || selected) 2.dp else 1.dp
-    val titleColor = if (selected) colorScheme.primary else colorScheme.onSurface
+    val titleColor = if (selected) colorScheme.primary.copy(alpha = 0.82f) else colorScheme.onSurface
+    val scale by animateFloatAsState(if (focused) 1.03f else 1f, label = "choiceScale")
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
+            .scale(scale)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
@@ -1870,7 +1880,7 @@ private fun ProfileChoiceRow(
                 }
             }
             .focusable(interactionSource = interactionSource)
-            .background(containerColor, rowShape)
+            .background(containerBrush, rowShape)
             .border(BorderStroke(borderWidth, borderColor), rowShape)
             .clip(rowShape)
             .clickable(onClick = onClick)
@@ -2735,7 +2745,7 @@ private fun ProfileNameField(
             ),
         )
     } else {
-        val borderColor = if (hoverFocused) DarkFocusHighlight else colorScheme.outlineVariant.copy(alpha = 0.28f)
+        val borderColor = if (hoverFocused) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.28f)
         val borderWidth = if (hoverFocused) 2.dp else 1.dp
         Column(
             modifier = Modifier
