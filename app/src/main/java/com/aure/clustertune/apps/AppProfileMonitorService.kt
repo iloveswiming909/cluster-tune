@@ -16,10 +16,12 @@ import androidx.core.app.NotificationCompat
 import com.aure.clustertune.AppContainer
 import com.aure.clustertune.R
 import com.aure.clustertune.ui.SingleToast
+import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.currentCoroutineContext
@@ -36,17 +38,23 @@ class AppProfileMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instanceCount++
+        JdwpDebugLog.d("AppProfileMonitor onCreate (live instances=$instanceCount)")
         container = AppContainer(this)
         startForeground(NOTIFICATION_ID, buildNotification())
         monitorJob = scope.launch { monitorForegroundApps() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        JdwpDebugLog.d("AppProfileMonitor onStartCommand (startId=$startId, flags=$flags)")
         return START_STICKY
     }
 
     override fun onDestroy() {
+        instanceCount--
+        JdwpDebugLog.d("AppProfileMonitor onDestroy (live instances=$instanceCount)")
         monitorJob?.cancel()
+        scope.cancel()
         super.onDestroy()
     }
 
@@ -165,6 +173,11 @@ class AppProfileMonitorService : Service() {
         private const val NOTIFICATION_ID = 2002
         private const val POLL_INTERVAL_MS = 750L
         private const val LOOKBACK_MS = 30_000L
+
+        // Number of live service instances. Should never exceed 1. If diagnostics
+        // show this climbing, the service is being restart-thrashed.
+        @Volatile
+        private var instanceCount = 0
 
         fun start(context: Context) {
             if (!hasUsageStatsPermission(context)) return

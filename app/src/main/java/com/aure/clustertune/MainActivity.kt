@@ -47,6 +47,7 @@ import com.aure.clustertune.update.AppUpdateManager
 import com.aure.clustertune.update.InstallLaunchResult
 import com.aure.clustertune.update.UpdateCheckPolicy
 import com.aure.clustertune.update.UpdateCheckResult
+import com.wuyr.jdwp_injector.debug.JdwpDebugLog
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -56,6 +57,14 @@ class MainActivity : ComponentActivity() {
     private val appUpdateManager by lazy { AppUpdateManager(this) }
     private val shizukuCommandRunner by lazy { ShizukuCommandRunner() }
     private val pendingUpdateRelease = mutableStateOf<AppRelease?>(null)
+
+    // Tracks the notification-permission flow so we prompt at most once per
+    // session and never re-launch the permission dialog in a loop (that loop was
+    // the cause of the 100% CPU usage when notifications were denied).
+    private enum class MonitorStart { SLEEP, APP, BOTH }
+    private var notificationPermissionAsked = false
+    private var pendingMonitorStart: MonitorStart? = null
+
     private val viewModel by viewModels<TunerViewModel> {
         TunerViewModel.factory(
             repository = container.repository,
@@ -76,13 +85,35 @@ class MainActivity : ComponentActivity() {
     }
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) {
+    ) { granted ->
+        // POST_NOTIFICATIONS is cosmetic here: it only controls whether the
+        // foreground-service notification is visible. The monitors must start
+        // either way. Previously, denying the permission sent the app into a
+        // request loop: the old callback called startAppProfileMonitor(), which
+        // saw the permission still ungranted and immediately re-launched the
+        // permission request — deny → callback → request → deny → ... This tight
+        // loop is what drove CPU to 100%. We now record the outcome once, start
+        // the pending monitor directly (never re-request from the callback), and
+        // guard against re-prompting on later resumes.
+        JdwpDebugLog.d("notif-permission result: granted=$granted; pending=$pendingMonitorStart")
+        notificationPermissionAsked = true
+        val pending = pendingMonitorStart
+        pendingMonitorStart = null
         lifecycleScope.launch {
-            val settings = container.settingsStorage.settings.first()
-            if (settings.sleepProfileEnabled) {
-                SleepProfileMonitorService.start(this@MainActivity)
+            when (pending) {
+                MonitorStart.SLEEP -> SleepProfileMonitorService.start(this@MainActivity)
+                MonitorStart.APP -> AppProfileMonitorService.start(this@MainActivity)
+                MonitorStart.BOTH -> {
+                    val settings = container.settingsStorage.settings.first()
+                    if (settings.sleepProfileEnabled) {
+                        SleepProfileMonitorService.start(this@MainActivity)
+                    }
+                    if (container.repository.observeState().first().appProfileAssignments.isNotEmpty()) {
+                        AppProfileMonitorService.start(this@MainActivity)
+                    }
+                }
+                null -> Unit
             }
-            maybeStartAppProfileMonitor()
         }
     }
 
@@ -242,11 +273,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startSleepProfileMonitor() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (needsNotificationPermission()) {
+            requestNotificationPermissionOnce(MonitorStart.SLEEP)
             return
         }
         SleepProfileMonitorService.start(this)
@@ -258,14 +286,48 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (needsNotificationPermission()) {
+            requestNotificationPermissionOnce(MonitorStart.APP)
             return
         }
         AppProfileMonitorService.start(this)
+    }
+
+    private fun needsNotificationPermission(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Requests POST_NOTIFICATIONS at most once per app session. If the user has
+     * already been asked (and presumably declined), we do NOT keep re-prompting
+     * on every onResume — instead we start the requested monitor directly. The
+     * monitor works fine without the notification; only the status notification
+     * is hidden. This is what stops both the repeated double-prompt and the
+     * restart-thrash that pinned clocks to max.
+     */
+    private fun requestNotificationPermissionOnce(which: MonitorStart) {
+        if (notificationPermissionAsked) {
+            JdwpDebugLog.d("notif-permission already asked; starting $which without prompting")
+            when (which) {
+                MonitorStart.SLEEP -> SleepProfileMonitorService.start(this)
+                MonitorStart.APP -> AppProfileMonitorService.start(this)
+                MonitorStart.BOTH -> {
+                    SleepProfileMonitorService.start(this)
+                    AppProfileMonitorService.start(this)
+                }
+            }
+            return
+        }
+        // Coalesce a simultaneous sleep+app request into one prompt.
+        pendingMonitorStart = when {
+            pendingMonitorStart == null -> which
+            pendingMonitorStart == which -> which
+            else -> MonitorStart.BOTH
+        }
+        JdwpDebugLog.d("requesting notif-permission; pending=$pendingMonitorStart")
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun maybeRequestQuickSettingsTileOnFirstRun() {
