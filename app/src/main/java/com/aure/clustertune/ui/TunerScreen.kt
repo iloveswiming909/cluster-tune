@@ -469,6 +469,14 @@ fun CompactProfilePickerScreen(
         state.selectedDisplayProfileId,
     ).firstOrNull { profileId -> profiles.any { profile -> profile.id == profileId } }
 
+    val firstRowFocus = remember { FocusRequester() }
+    LaunchedEffect(profiles.isEmpty()) {
+        if (profiles.isNotEmpty()) {
+            kotlinx.coroutines.delay(80)
+            runCatching { firstRowFocus.requestFocus() }
+        }
+    }
+
     ScreenContainer(
         compactMode = true,
         showCompactScrim = showCompactScrim,
@@ -520,11 +528,12 @@ fun CompactProfilePickerScreen(
                 if (profiles.isEmpty()) {
                     ProfilePickerEmptyOptionCard()
                 } else {
-                    profiles.forEach { profile ->
+                    profiles.forEachIndexed { index, profile ->
                         ProfileChoiceRow(
                             title = profile.name,
                             selected = selectedProfileId == profile.id,
                             onClick = { onApplyProfile(profile) },
+                            focusRequester = if (index == 0) firstRowFocus else null,
                         )
                     }
                 }
@@ -1604,15 +1613,6 @@ private fun CenteredModalSurface(
             dismissOnBackPress = true,
         ),
     ) {
-        // Give the dialog an initial focus target so D-pad/controller input can
-        // navigate WITHIN it. Without this, a freshly-opened Compose dialog has
-        // nothing focused and the controller appears to do nothing.
-        val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) {
-            // Small delay lets the dialog content compose before we grab focus.
-            kotlinx.coroutines.delay(50)
-            runCatching { focusRequester.requestFocus() }
-        }
         BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
@@ -1622,8 +1622,6 @@ private fun CenteredModalSurface(
                     .fillMaxWidth(widthFraction)
                     .height(maxHeight * heightFraction)
                     .widthIn(max = maxWidth)
-                    .focusRequester(focusRequester)
-                    .focusGroup()
                     .clickable(
                         interactionSource = surfaceInteractionSource,
                         indication = null,
@@ -1653,6 +1651,11 @@ private fun AppProfileAssignmentDialog(
     val colorScheme = MaterialTheme.colorScheme
 
     CenteredModalSurface(maxWidth = 520.dp, onDismiss = onDismiss) {
+        val firstRowFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(80)
+            runCatching { firstRowFocus.requestFocus() }
+        }
         Column(modifier = Modifier.fillMaxHeight()) {
             Row(
                 modifier = Modifier
@@ -1704,6 +1707,7 @@ private fun AppProfileAssignmentDialog(
                         title = "None",
                         selected = selectedProfileId == null,
                         onClick = { selectedProfileId = null },
+                        focusRequester = firstRowFocus,
                     )
                     profiles.forEach { profile ->
                         ProfileChoiceRow(
@@ -1761,6 +1765,7 @@ private fun ProfileChoiceRow(
     selected: Boolean,
     onClick: () -> Unit,
     compact: Boolean = false,
+    focusRequester: FocusRequester? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
@@ -1786,6 +1791,7 @@ private fun ProfileChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
+            .focusHighlight(highlightColor = colorScheme.primary, shape = rowShape, focusRequester = focusRequester)
             .background(containerBrush, rowShape)
             .border(BorderStroke(1.dp, borderColor), rowShape)
             .clip(rowShape)
@@ -2447,6 +2453,11 @@ private fun ProfileEditorDialog(
     val colorScheme = MaterialTheme.colorScheme
 
     CenteredModalSurface(maxWidth = 900.dp, onDismiss = onDismiss) {
+        val firstFieldFocus = remember { FocusRequester() }
+        LaunchedEffect(manualMode) {
+            kotlinx.coroutines.delay(80)
+            runCatching { firstFieldFocus.requestFocus() }
+        }
         Column(modifier = Modifier.fillMaxHeight()) {
             Column(
                 modifier = Modifier
@@ -2462,7 +2473,8 @@ private fun ProfileEditorDialog(
                         onValueChange = { profileName = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 62.dp),
+                            .heightIn(min = 62.dp)
+                            .focusRequester(firstFieldFocus),
                         singleLine = true,
                         label = { Text("Profile name") },
                         shape = RoundedCornerShape(20.dp),

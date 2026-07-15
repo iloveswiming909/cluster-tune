@@ -133,23 +133,6 @@ class MainActivity : ComponentActivity() {
                                 showWirelessSetup = false
                                 // Connecting there changes availability; re-probe.
                                 viewModel.recheckExecutionAvailability()
-                                // Try to exit split-screen by relaunching
-                                // ClusterTune in fullscreen windowing mode.
-                                // (Android has no official "exit split" API; this
-                                // is best-effort and OS-dependent.)
-                                runCatching {
-                                    val intent = android.content.Intent(this@MainActivity, MainActivity::class.java)
-                                        .addFlags(
-                                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP,
-                                        )
-                                    val options = android.os.Bundle().apply {
-                                        // 1 = WINDOWING_MODE_FULLSCREEN
-                                        putInt("android.activity.windowingMode", 1)
-                                    }
-                                    startActivity(intent, options)
-                                }
                             },
                         )
                     } else if (showSettings) {
