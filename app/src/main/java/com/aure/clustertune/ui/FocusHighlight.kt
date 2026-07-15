@@ -18,6 +18,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
+ * A dark, high-contrast border used for focus indication. The app's [primary]
+ * accent is a light beige on the Odin's dynamic-color scheme, so a beige border
+ * on a beige surface was nearly invisible. A near-black outline reads clearly on
+ * top of the light surfaces regardless of the accent color.
+ */
+val DarkFocusHighlight: Color = Color(0xFF101010)
+
+/**
  * Adds a clearly visible focus indication (bright border + slight scale) when a
  * component gains D-pad/controller focus. Without this, focused elements are
  * hard to distinguish — which is both a controller-navigation problem and the
@@ -27,7 +35,7 @@ import androidx.compose.ui.unit.dp
  * requestFocus() on it when the screen/dialog opens).
  */
 fun Modifier.focusHighlight(
-    highlightColor: Color,
+    highlightColor: Color = DarkFocusHighlight,
     shape: RoundedCornerShape = RoundedCornerShape(20.dp),
     borderWidth: Dp = 3.dp,
     focusedScale: Float = 1.03f,

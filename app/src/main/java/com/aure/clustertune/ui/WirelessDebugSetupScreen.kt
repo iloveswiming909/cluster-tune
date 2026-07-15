@@ -185,13 +185,13 @@ fun WirelessDebugSetupScreen(
                             openAdjacent(context, Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
                             devOptionsEnabled = isDevOptionsEnabled(context)
                         },
-                        modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth().focusHighlight(),
                     ) {
                         Text("Open About phone (tap Build number 7×)")
                     }
                     OutlinedButton(
                         onClick = { devOptionsEnabled = isDevOptionsEnabled(context) },
-                        modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth().focusHighlight(),
                     ) {
                         Text("I've enabled Developer options")
                     }
@@ -202,7 +202,7 @@ fun WirelessDebugSetupScreen(
                             openWirelessDebugging(context)
                             startConnect()
                         },
-                        modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth().focusHighlight(),
                     ) {
                         Text("Open Wireless debugging (split screen)")
                     }
@@ -239,7 +239,7 @@ fun WirelessDebugSetupScreen(
                             }
                         },
                         enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth().focusHighlight(),
                     ) {
                         Text(if (busy) "Connecting…" else "Connect")
                     }
@@ -251,7 +251,7 @@ fun WirelessDebugSetupScreen(
                     )
                     OutlinedButton(
                         onClick = { startPairing() },
-                        modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth().focusHighlight(),
                     ) {
                         Text("Start pairing")
                     }
@@ -269,7 +269,7 @@ fun WirelessDebugSetupScreen(
                                     label = { Text("6-digit pairing code") },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.fillMaxWidth().focusHighlight(),
                                 )
                                 Button(
                                     onClick = {
@@ -296,7 +296,7 @@ fun WirelessDebugSetupScreen(
                                         }
                                     },
                                     enabled = pairingCode.length == 6 && !busy,
-                                    modifier = Modifier.fillMaxWidth().focusHighlight(highlightColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.fillMaxWidth().focusHighlight(),
                                 ) {
                                     Text("Pair")
                                 }

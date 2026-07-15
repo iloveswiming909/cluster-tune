@@ -79,8 +79,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -1632,7 +1639,16 @@ private fun CenteredModalSurface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)),
             ) {
-                content()
+                // focusGroup gives Compose's 2-D focus search a bounded region to
+                // resolve D-pad Up/Down/Left/Right within. Material's AlertDialog
+                // provides this automatically; this custom Dialog did not, which
+                // is why controller navigation (rows AND the Save/Cancel buttons)
+                // was dead in the two dialogs built on CenteredModalSurface. With
+                // the group in place, focus reliably traverses the content even if
+                // a per-dialog initial requestFocus() lands a frame early.
+                Box(modifier = Modifier.focusGroup()) {
+                    content()
+                }
             }
         }
     }
@@ -1791,7 +1807,7 @@ private fun ProfileChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
-            .focusHighlight(highlightColor = colorScheme.primary, shape = rowShape, focusRequester = focusRequester)
+            .focusHighlight(shape = rowShape, focusRequester = focusRequester)
             .background(containerBrush, rowShape)
             .border(BorderStroke(1.dp, borderColor), rowShape)
             .clip(rowShape)
@@ -2453,10 +2469,14 @@ private fun ProfileEditorDialog(
     val colorScheme = MaterialTheme.colorScheme
 
     CenteredModalSurface(maxWidth = 900.dp, onDismiss = onDismiss) {
-        val firstFieldFocus = remember { FocusRequester() }
+        // Initial focus lands on the first slider, not the name field. Focusing
+        // the OutlinedTextField auto-opened the soft keyboard every time the
+        // dialog opened, which was disruptive on a controller. The name field is
+        // still reachable by D-pad-up from the first slider.
+        val firstSliderFocus = remember { FocusRequester() }
         LaunchedEffect(manualMode) {
             kotlinx.coroutines.delay(80)
-            runCatching { firstFieldFocus.requestFocus() }
+            runCatching { firstSliderFocus.requestFocus() }
         }
         Column(modifier = Modifier.fillMaxHeight()) {
             Column(
@@ -2473,8 +2493,7 @@ private fun ProfileEditorDialog(
                         onValueChange = { profileName = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 62.dp)
-                            .focusRequester(firstFieldFocus),
+                            .heightIn(min = 62.dp),
                         singleLine = true,
                         label = { Text("Profile name") },
                         shape = RoundedCornerShape(20.dp),
@@ -2488,7 +2507,7 @@ private fun ProfileEditorDialog(
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    baseState.policies.forEach { policy ->
+                    baseState.policies.forEachIndexed { index, policy ->
                         PolicyCard(
                             policy = policy,
                             selectedValue = editedValues[policy.id] ?: policy.currentMaxFreq,
@@ -2498,6 +2517,7 @@ private fun ProfileEditorDialog(
                             },
                             compactMode = true,
                             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
+                            sliderFocusRequester = if (index == 0) firstSliderFocus else null,
                         )
                     }
                 }
@@ -2609,6 +2629,7 @@ private fun PolicyCard(
     compactMode: Boolean = false,
     displayFrequenciesAsPercent: Boolean = false,
     actualValue: Int = selectedValue,
+    sliderFocusRequester: FocusRequester? = null,
 ) {
     val supported = policy.supportedFrequencies
     val displaySelectedValue = policy.clampToWritableMax(selectedValue)
@@ -2678,6 +2699,7 @@ private fun PolicyCard(
                     maxIndex = supported.lastIndex,
                     onIndexChange = { index -> onValueChanged(supported[index]) },
                     modifier = Modifier.weight(1f),
+                    focusRequester = sliderFocusRequester,
                 )
 
                 Text(
@@ -2702,15 +2724,45 @@ private fun CompactFrequencySlider(
     maxIndex: Int,
     onIndexChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val trackHeight = with(density) { 4.dp.toPx() }
     val tickRadius = with(density) { 1.4.dp.toPx() }
     val thumbRadius = with(density) { 7.dp.toPx() }
+    val focusRingRadius = with(density) { 11.dp.toPx() }
     val cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
+    val interactionSource = remember { MutableInteractionSource() }
 
-    BoxWithConstraints(modifier = modifier.height(24.dp)) {
+    var focused by remember { mutableStateOf(false) }
+
+    // D-pad / controller stepping. Left decreases, Right increases. Returning
+    // true consumes the event so focus does NOT leave the slider on a horizontal
+    // press — left/right adjusts the value instead of moving to the next element.
+    // Up/Down are left unhandled (return false) so the vertical D-pad still moves
+    // focus between rows and out to the Save/Cancel buttons.
+    fun step(delta: Int) {
+        if (maxIndex <= 0) return
+        val next = (valueIndex + delta).coerceIn(0, maxIndex)
+        if (next != valueIndex) onIndexChange(next)
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .height(24.dp)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onFocusChanged { focused = it.isFocused }
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> { step(-1); true }
+                    Key.DirectionRight -> { step(1); true }
+                    else -> false
+                }
+            }
+            .focusable(interactionSource = interactionSource),
+    ) {
         val widthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
         fun indexForPosition(x: Float): Int {
             if (maxIndex <= 0) return 0
@@ -2762,6 +2814,16 @@ private fun CompactFrequencySlider(
                         center = Offset(tickX, centerY),
                     )
                 }
+            }
+            // Dark focus ring around the thumb when the slider has controller
+            // focus, so it's obvious which slider the D-pad is driving.
+            if (focused) {
+                drawCircle(
+                    color = DarkFocusHighlight,
+                    radius = focusRingRadius,
+                    center = Offset(thumbX, centerY),
+                    style = Stroke(width = with(density) { 2.dp.toPx() }),
+                )
             }
             drawCircle(
                 color = colorScheme.primary,
