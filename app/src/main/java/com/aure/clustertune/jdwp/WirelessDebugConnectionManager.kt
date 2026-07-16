@@ -85,6 +85,44 @@ class WirelessDebugConnectionManager private constructor(
         }
     }
 
+    /**
+     * Forget the current connection entirely. Clears [connectionInfo] and tears
+     * down the persistent shell + JDWP session so a fresh connect starts clean.
+     * Called when the connection is found to be dead (e.g. wireless debugging was
+     * turned off, or the pairing was deleted in system settings).
+     */
+    fun clearConnection() {
+        JdwpDebugLog.d("clearConnection(): forgetting connection + sessions")
+        connectionInfo = null
+        invalidateShell()
+        synchronized(jdwpLock) {
+            runCatching { persistentDebugger?.close() }
+            persistentDebugger = null
+            persistentDebuggerPid = -1
+        }
+    }
+
+    /**
+     * Returns true if there is a live connection. If [connectionInfo] is set but
+     * the underlying transport is actually dead, this clears it and returns false
+     * — so the UI/state can fall back to the setup prompt instead of trusting a
+     * stale "connected" flag. Runs a cheap shell probe; call off the main thread.
+     */
+    fun verifyConnection(): Boolean {
+        connectionInfo ?: return false
+        // Reuse the persistent shell (which only reopens if the existing one is
+        // dead) rather than always opening a fresh socket — opening a new adb
+        // connection pops the "wireless debugging connected" heads-up, and this
+        // runs on every resume. sharedShell() returns null if the transport can't
+        // be (re)established, which is our signal the connection is gone.
+        val shell = sharedShell()
+        val alive = shell != null && runCatching { shell.sendShellCommand("true") }.isSuccess
+        if (!alive) {
+            clearConnection()
+        }
+        return alive
+    }
+
     // ---- Persistent JDWP session (reused across applies) --------------------
     // Attaching a JDWP debugger opens an adb transport, which makes Android post
     // the "wireless debugging connected" heads-up. Re-attaching on every apply

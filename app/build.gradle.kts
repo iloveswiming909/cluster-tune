@@ -90,6 +90,15 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            // Android framework calls (e.g. android.util.Log, DateFormat) have no
+            // implementation under plain JVM unit tests. Returning default values
+            // instead of throwing "not mocked" keeps the release pipeline's unit
+            // tests from failing when exercised code paths touch Android stubs.
+            isReturnDefaultValues = true
+        }
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

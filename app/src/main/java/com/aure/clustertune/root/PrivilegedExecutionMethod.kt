@@ -67,10 +67,32 @@ class PrivilegedExecutionResolver(
 
     fun selectedMethod(forceReprobe: Boolean = false): PrivilegedExecutionMethod? {
         if (!forceReprobe) {
-            cachedMethod?.let { return it }
+            cachedMethod?.let { cached ->
+                // Re-validate a cached (positive) method on a short TTL. Without
+                // this, once a method probed available it stayed "available"
+                // forever from cache — so if the wireless-debug connection was
+                // lost (or deleted in system settings), the app never noticed and
+                // kept showing the profile screen instead of falling back to the
+                // setup prompt. The method probes are themselves cheaply cached,
+                // so this re-check is inexpensive.
+                if (System.currentTimeMillis() - lastProbeAtMs < POSITIVE_CACHE_MS) {
+                    return cached
+                }
+                val stillAvailable = cached.probe().isAvailable
+                lastProbeAtMs = System.currentTimeMillis()
+                if (stillAvailable) {
+                    return cached
+                }
+                // Cached method is no longer usable; drop it and fall through to a
+                // full re-probe below.
+                cachedMethod = null
+                cachedProbe = null
+            }
             // Cache the negative result too, briefly, to avoid re-probing every
             // read when nothing is available.
-            if (System.currentTimeMillis() - lastProbeAtMs < NEGATIVE_CACHE_MS) {
+            if (cachedMethod == null &&
+                System.currentTimeMillis() - lastProbeAtMs < NEGATIVE_CACHE_MS
+            ) {
                 return null
             }
         }
@@ -141,6 +163,10 @@ class PrivilegedExecutionResolver(
         // How long a "nothing available" result is cached before re-probing,
         // to prevent constant re-probing on every isAvailable read.
         private const val NEGATIVE_CACHE_MS = 3000L
+        // How long a positive (method-available) result is trusted before the
+        // selected method is re-probed to confirm it's still usable. Keeps
+        // connection-loss detection responsive without re-probing every read.
+        private const val POSITIVE_CACHE_MS = 2000L
 
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",

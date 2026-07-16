@@ -24,19 +24,26 @@ object JdwpDebugLog {
     fun snapshot(): List<String> = synchronized(buffer) { buffer.toList() }
 
     fun d(message: String) {
-        Log.d(TAG, message)
+        runCatching { Log.d(TAG, message) }
         add(message)
     }
 
     fun w(message: String, t: Throwable? = null) {
-        Log.w(TAG, message, t)
+        runCatching { Log.w(TAG, message, t) }
         add("! " + message + (t?.message?.let { ": $it" } ?: ""))
     }
 
     private fun add(message: String) {
-        val ts = android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis())
+        // DateFormat.format is an Android API; under plain JVM unit tests there is
+        // no Android runtime, so it (and Log above) would throw "not mocked".
+        // Guard both so diagnostic logging never breaks a caller — most
+        // importantly so the release pipeline's unit tests, which exercise code
+        // paths that log, don't fail on an Android stub.
+        val ts = runCatching {
+            android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis()).toString()
+        }.getOrElse { "" }
         synchronized(buffer) {
-            buffer.addLast("[$ts] $message")
+            buffer.addLast(if (ts.isEmpty()) message else "[$ts] $message")
             while (buffer.size > MAX) buffer.removeFirst()
         }
         listener?.invoke()

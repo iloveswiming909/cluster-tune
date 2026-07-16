@@ -75,8 +75,33 @@ fun WirelessDebugSetupScreen(
     var status by remember { mutableStateOf("Not connected") }
     var pairingReady by remember { mutableStateOf(false) }
     var pairingCode by remember { mutableStateOf("") }
-    var connected by remember { mutableStateOf(connectionManager.connectionInfo != null) }
+    // Start pessimistic: do not trust a possibly-stale connectionInfo. We verify
+    // the transport is actually alive below and only then show "connected". This
+    // is what fixes the contradictory "Not connected" + "✓ Ready" state after a
+    // connection was lost or deleted in system settings.
+    var connected by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+
+    // On open, if the manager thinks it's connected, confirm the transport really
+    // is alive (off the main thread). If it's dead, this clears the stale info so
+    // the reconnect UI (Connect / pairing steps) is shown.
+    LaunchedEffect(Unit) {
+        if (connectionManager.connectionInfo != null) {
+            status = "Checking existing connection…"
+            val alive = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                connectionManager.verifyConnection()
+            }
+            if (alive) {
+                connected = true
+                connectionManager.connectionInfo?.let { info ->
+                    status = "Connected (${info.host}:${info.port}). You're ready."
+                }
+            } else {
+                connected = false
+                status = "Previous connection lost. Reconnect below."
+            }
+        }
+    }
 
     // Once connected, briefly show success then return to the app automatically
     // (also brings ClusterTune back to fullscreen out of the split view).
