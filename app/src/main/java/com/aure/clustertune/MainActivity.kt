@@ -329,20 +329,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // Re-probe execution availability on every resume so a connection that
-        // was lost while the app was backgrounded (or debugging deleted in system
-        // settings) is reflected: the main screen falls back to the setup prompt
-        // instead of showing a profile list that can no longer be applied. Verify
-        // the transport is actually alive first (off the main thread) so a stale
-        // connectionInfo gets cleared before the availability re-probe reads it.
-        lifecycleScope.launch {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val cm = container.wirelessDebugConnectionManager
-                if (cm.connectionInfo != null) {
-                    cm.verifyConnection()
-                }
-            }
-            viewModel.recheckExecutionAvailability()
-        }
+        // Re-probe execution availability on every resume so the main screen
+        // reflects the current state (e.g. falls back to the setup prompt if there
+        // is no connection). We do NOT actively tear down the connection here — a
+        // dead connection is detected non-destructively at apply time. (An earlier
+        // version verified by opening a shell and cleared the session on failure,
+        // which killed working connections on some devices.)
+        viewModel.recheckExecutionAvailability()
         maybeStartSleepProfileMonitor()
         maybeStartAppProfileMonitor()
     }

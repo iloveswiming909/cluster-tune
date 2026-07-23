@@ -82,15 +82,13 @@ fun WirelessDebugSetupScreen(
     var connected by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
-    // On open, if the manager thinks it's connected, confirm the transport really
-    // is alive (off the main thread). If it's dead, this clears the stale info so
-    // the reconnect UI (Connect / pairing steps) is shown.
+    // On open, reflect whether we currently have a connection. (Verification is
+    // intentionally non-destructive now — it must never tear down a live session,
+    // which previously caused connect→clear→reconnect loops and handshake
+    // failures. A genuinely dead connection surfaces at apply time.)
     LaunchedEffect(Unit) {
         if (connectionManager.connectionInfo != null) {
-            status = "Checking existing connection…"
-            val alive = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                connectionManager.verifyConnection()
-            }
+            val alive = connectionManager.verifyConnection()
             if (alive) {
                 connected = true
                 connectionManager.connectionInfo?.let { info ->
@@ -98,7 +96,7 @@ fun WirelessDebugSetupScreen(
                 }
             } else {
                 connected = false
-                status = "Previous connection lost. Reconnect below."
+                status = "Not connected"
             }
         }
     }

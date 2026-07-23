@@ -108,19 +108,22 @@ class WirelessDebugConnectionManager private constructor(
      * — so the UI/state can fall back to the setup prompt instead of trusting a
      * stale "connected" flag. Runs a cheap shell probe; call off the main thread.
      */
+    /**
+     * Reports whether we currently believe we have a connection, for UI display.
+     *
+     * IMPORTANT: this must NOT tear the connection down. An earlier version opened
+     * a shell here as a "liveness test" and called clearConnection() if that
+     * failed — but the shell transport and the JDWP transport are independent, so
+     * on some devices/networks the shell open fails while the JDWP session is
+     * perfectly alive. That false negative destroyed working sessions on every
+     * resume / setup-screen open, producing a connect→clear→reconnect→clear loop
+     * and "handshake failed" on apply. We now only report presence and never
+     * clear here. A genuinely dead connection is detected + dropped lazily at
+     * apply time (injectExecPersistent/sharedShell drop their sessions on real
+     * failure), which is the correct, non-destructive place to notice it.
+     */
     fun verifyConnection(): Boolean {
-        connectionInfo ?: return false
-        // Reuse the persistent shell (which only reopens if the existing one is
-        // dead) rather than always opening a fresh socket — opening a new adb
-        // connection pops the "wireless debugging connected" heads-up, and this
-        // runs on every resume. sharedShell() returns null if the transport can't
-        // be (re)established, which is our signal the connection is gone.
-        val shell = sharedShell()
-        val alive = shell != null && runCatching { shell.sendShellCommand("true") }.isSuccess
-        if (!alive) {
-            clearConnection()
-        }
-        return alive
+        return connectionInfo != null
     }
 
     // ---- Persistent JDWP session (reused across applies) --------------------
