@@ -62,6 +62,13 @@ private val executionMethodInfo = listOf(
         labelRes = R.string.settings_execution_jdwp,
         descriptionRes = R.string.settings_execution_jdwp_description,
     ),
+    // Resident system-uid daemon bootstrapped by the JDWP path; survives Wi-Fi
+    // being turned off for the rest of the boot.
+    ExecutionMethodInfo(
+        id = "system-daemon",
+        labelRes = R.string.settings_execution_daemon,
+        descriptionRes = R.string.settings_execution_daemon_description,
+    ),
 )
 
 @Composable
@@ -101,7 +108,9 @@ internal fun DeviceExecutionMethodCard(
         // When the no-root wireless-debugging method is in use, expose a way back
         // into the pairing flow so it can be redone (the connect port changes on
         // every boot / whenever wireless debugging is toggled).
-        if (selectedMethodId == "jdwp-inject" && onOpenWirelessDebugSetup != null) {
+        if ((selectedMethodId == "jdwp-inject" || selectedMethodId == "system-daemon") &&
+            onOpenWirelessDebugSetup != null
+        ) {
             OutlinedButton(
                 onClick = onOpenWirelessDebugSetup,
                 modifier = Modifier.fillMaxWidth(),
@@ -192,6 +201,7 @@ private fun PrivilegedExecutionMethodSelector(
         "pserver-stdout" -> stringResource(R.string.settings_execution_pserver)
         "root-shell" -> stringResource(R.string.settings_execution_root)
         "jdwp-inject" -> stringResource(R.string.settings_execution_jdwp)
+        "system-daemon" -> stringResource(R.string.settings_execution_daemon)
         null -> stringResource(R.string.settings_execution_not_selected)
         else -> selectedMethodId
     }

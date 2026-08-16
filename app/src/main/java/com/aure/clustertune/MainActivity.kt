@@ -259,6 +259,9 @@ class MainActivity : ComponentActivity() {
                                 // Connecting there changes availability; re-probe.
                                 viewModel.recheckExecutionAvailability()
                             },
+                            onConnectionEstablished = {
+                                container.bootstrapSystemDaemonIfPossible()
+                            },
                         )
                     } else if (showSettings) {
                         SettingsScreen(
@@ -484,6 +487,10 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!alive) {
                     wirelessConnectionLost.value = true
+                } else {
+                    // A live JDWP link is the only chance to start the offline
+                    // daemon. Do it now so the user can drop Wi-Fi afterwards.
+                    container.bootstrapSystemDaemonIfPossible()
                 }
             }
             viewModel.recheckExecutionAvailability()

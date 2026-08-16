@@ -107,4 +107,6 @@
     <string name="settings_execution_jdwp">Wireless debugging (no root)</string>
     <string name="settings_execution_jdwp_description">No root and no PC required. Pair once per boot using Android\'s built-in Wireless debugging. Works on Odin 2 Mini.</string>
     <string name="settings_execution_jdwp_setup">Set up wireless debugging</string>
+    <string name="settings_execution_daemon">Offline daemon (no root)</string>
+    <string name="settings_execution_daemon_description">Started once per boot over Wireless debugging, then keeps working with Wi\u2011Fi off. Restart the app on Wi\u2011Fi after a reboot to start it again.</string>
 </resources>

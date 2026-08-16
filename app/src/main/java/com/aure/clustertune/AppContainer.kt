@@ -8,6 +8,8 @@ import com.aure.clustertune.data.InstalledAppRepository
 import com.aure.clustertune.data.PerformanceRepository
 import com.aure.clustertune.data.ProfileStorage
 import com.aure.clustertune.data.SettingsStorage
+import com.aure.clustertune.daemon.SystemDaemonBootstrapper
+import com.aure.clustertune.daemon.SystemDaemonExecutionMethod
 import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
 import com.aure.clustertune.root.ExecutionMethodSysfsLister
 import com.aure.clustertune.root.PerformanceCommandBuilder
@@ -39,6 +41,66 @@ class AppContainer(context: Context) {
      */
     val wirelessDebugConnectionManager: WirelessDebugConnectionManager
         get() = WirelessDebugConnectionManager.getInstance(appContext)
+
+    /**
+     * Bootstraps and monitors the resident system-uid daemon.
+     *
+     * Background: Android tears wireless debugging down whenever Wi-Fi drops —
+     * measured on the Odin 2 Mini, persist.adb.tls_server.enable flips 1 -> 0
+     * and adbd stops listening entirely. So the JDWP path cannot serve per-app
+     * profile switching while offline, regardless of which address it targets.
+     * Instead we use JDWP ONCE per boot (while Wi-Fi is up) to launch a detached
+     * `sh` daemon owned by uid=system, and every later apply talks to that
+     * daemon over files. GameAssistant is only the launcher; nothing is injected
+     * into it beyond the single Runtime.exec already used for a normal apply.
+     */
+    private val systemDaemonMethod = SystemDaemonExecutionMethod()
+
+    private val systemDaemonBootstrapper by lazy {
+        SystemDaemonBootstrapper(daemonMethod = systemDaemonMethod)
+    }
+
+    /** True when an offline-capable daemon is currently serving requests. */
+    val isSystemDaemonAlive: Boolean
+        get() = systemDaemonMethod.isDaemonAlive()
+
+    /**
+     * Start the daemon if it is not already running and a JDWP connection is
+     * available to launch it with. Safe to call repeatedly; returns quickly when
+     * there is nothing to do. Never blocks the caller.
+     */
+    fun bootstrapSystemDaemonIfPossible() {
+        if (systemDaemonMethod.isDaemonAlive() &&
+            systemDaemonMethod.runningDaemonVersion() ==
+            com.aure.clustertune.daemon.SystemDaemonProtocol.DAEMON_VERSION
+        ) {
+            return
+        }
+        if (wirelessDebugConnectionManager.connectionInfo == null) return
+        if (!daemonBootstrapInFlight.compareAndSet(false, true)) return
+        appScope.launch {
+            try {
+                val jdwp = privilegedExecutionResolver.methodById("jdwp-inject")
+                if (jdwp == null) {
+                    Log.i(TAG, "Daemon bootstrap skipped: no JDWP method registered")
+                    return@launch
+                }
+                val result = systemDaemonBootstrapper.ensureRunning(jdwp)
+                Log.i(TAG, "Daemon bootstrap: $result")
+                // Let the resolver re-select now that the daemon may be live, so
+                // subsequent applies take the offline-capable path.
+                privilegedExecutionResolver.autoDetectBestMethod()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                Log.w(TAG, "Daemon bootstrap failed", error)
+            } finally {
+                daemonBootstrapInFlight.set(false)
+            }
+        }
+    }
+
+    private val daemonBootstrapInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
         PrivilegedExecutionResolver.default(
@@ -134,6 +196,17 @@ class AppContainer(context: Context) {
             // The Odin does not need this migration; skipping it is correct.
             if (methodId == "jdwp-inject") {
                 Log.i(TAG, "Sysfs minimum repair skipped: not applicable to the JDWP path")
+                return
+            }
+            // The system daemon DOES block until the script has run and DOES
+            // return stdout, so unlike the JDWP path the repair can complete and
+            // be verified here. It is still allowed to run only once: a repeated
+            // failure would hold processApplyMutex across all retries and block
+            // profile applies, which is the same trap the JDWP path fell into.
+            if (methodId == com.aure.clustertune.daemon.SystemDaemonExecutionMethod.METHOD_ID &&
+                attempt > 0
+            ) {
+                Log.i(TAG, "Sysfs minimum repair: not retrying on the daemon path")
                 return
             }
             val result = try {

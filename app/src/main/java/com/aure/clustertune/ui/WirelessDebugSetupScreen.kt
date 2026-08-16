@@ -67,6 +67,12 @@ import kotlinx.coroutines.withContext
 fun WirelessDebugSetupScreen(
     connectionManager: WirelessDebugConnectionManager,
     onBack: () -> Unit,
+    /**
+     * Invoked whenever a live connection is established. Used to bootstrap the
+     * resident system daemon at the only moment it can be started — while the
+     * JDWP link is up. Defaults to a no-op so previews/tests need no change.
+     */
+    onConnectionEstablished: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -143,6 +149,7 @@ fun WirelessDebugSetupScreen(
                     connectedThisVisit = true
                 }
                 status = "Connected (${info.host}:${info.port}). You're ready."
+                onConnectionEstablished()
             },
         )
         onDispose {
@@ -167,6 +174,7 @@ fun WirelessDebugSetupScreen(
                 connected = true
                 connectedThisVisit = true
                 status = "Connected (${info.host}:${info.port}). You're ready."
+                onConnectionEstablished()
             },
             onUnavailable = {
                 status = "Wireless debugging not found yet. Make sure it's ON, then pair below."
@@ -190,6 +198,7 @@ fun WirelessDebugSetupScreen(
                         connected = true
                         connectedThisVisit = true
                         status = "Connected (${info.host}:${info.port}). You're ready."
+                        onConnectionEstablished()
                     } else {
                         status = "Couldn't connect. Make sure Wireless debugging is ON."
                     }
@@ -367,6 +376,7 @@ fun WirelessDebugSetupScreen(
                                                         connected = true
                                                         connectedThisVisit = true
                                                         status = "Connected (${info.host}:${info.port}). You're ready."
+                                                        onConnectionEstablished()
                                                     },
                                                 )
                                                 startConnect()

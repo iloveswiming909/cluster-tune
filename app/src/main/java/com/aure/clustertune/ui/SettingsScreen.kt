@@ -458,6 +458,7 @@ fun SettingsScreen(
 internal fun executionMethodLabel(methodId: String): String = when (methodId) {
     "pserver-stdout" -> "PServer"
     "root-shell" -> "Root"
+    "system-daemon" -> "Daemon"
     else -> methodId
 }
 

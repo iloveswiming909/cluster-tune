@@ -72,6 +72,14 @@ class PrivilegedExecutionResolver(
         return method?.id
     }
 
+    /**
+     * Direct lookup by id, bypassing selection. Needed by the daemon
+     * bootstrapper, which must use the JDWP method specifically even once the
+     * resolver has switched over to preferring the daemon.
+     */
+    fun methodById(methodId: String): PrivilegedExecutionMethod? =
+        methods.firstOrNull { it.id == methodId }
+
     fun selectedMethod(forceReprobe: Boolean = false): PrivilegedExecutionMethod? {
         if (!forceReprobe) {
             cachedMethod?.let { return it }
@@ -133,7 +141,11 @@ class PrivilegedExecutionResolver(
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",
             "root-shell",
-            // No-root path; tried last so it only activates when nothing else works.
+            // No-root paths. The resident system daemon is preferred over raw
+            // JDWP because it needs no live adb connection (so it survives Wi-Fi
+            // being turned off) and because it reports stdout, which lets the
+            // 1.0.2 completion-marker contract be satisfied normally.
+            "system-daemon",
             "jdwp-inject",
         )
 
@@ -149,6 +161,10 @@ class PrivilegedExecutionResolver(
             val methods = mutableListOf<PrivilegedExecutionMethod>(
                 PServerStdoutExecutionMethod(context, rootExec),
                 RootShellExecutionMethod(),
+                // Always registered: it probes by checking a heartbeat file, so
+                // it is cheap and simply reports unavailable when no daemon has
+                // been bootstrapped this boot.
+                com.aure.clustertune.daemon.SystemDaemonExecutionMethod(),
             )
             if (jdwpConnectionProvider != null) {
                 methods += com.aure.clustertune.jdwp.JdwpInjectionExecutionMethod(
