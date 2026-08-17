@@ -111,6 +111,43 @@ class SystemDaemonExecutionMethod(
         }
     }
 
+    /**
+     * Reads many paths in ONE daemon round trip.
+     *
+     * Each round trip through /sdcard costs real time, so reading three
+     * scaling_min_freq nodes individually tripled the cost of every state
+     * refresh and of an apply's read-back verification. Output is framed with
+     * per-path markers so a missing or unreadable node is distinguishable from
+     * an empty one, and so no positional parsing is involved.
+     */
+    fun readTexts(paths: List<String>): Map<String, String> {
+        if (paths.isEmpty()) return emptyMap()
+        if (!isDaemonAlive()) return emptyMap()
+        val script = buildString {
+            appendLine("#!/system/bin/sh")
+            paths.forEachIndexed { index, path ->
+                appendLine("printf '%s\\n' '$FIELD_BEGIN$index'")
+                appendLine("cat ${shellQuote(path)} 2>/dev/null")
+                appendLine("printf '%s\\n' '$FIELD_END$index'")
+            }
+        }
+        val output = synchronized(requestLock) {
+            runCatching { dispatch(script) }.getOrNull()?.output
+        } ?: return emptyMap()
+
+        val result = mutableMapOf<String, String>()
+        val lines = output.lines()
+        paths.forEachIndexed { index, path ->
+            val begin = lines.indexOfFirst { it.trim() == "$FIELD_BEGIN$index" }
+            if (begin < 0) return@forEachIndexed
+            val end = lines.indexOfFirst { it.trim() == "$FIELD_END$index" }
+            if (end <= begin) return@forEachIndexed
+            val value = lines.subList(begin + 1, end).joinToString("\n").trim()
+            if (value.isNotEmpty()) result[path] = value
+        }
+        return result
+    }
+
     override fun readText(path: String): String? {
         if (!isDaemonAlive()) return null
         val script = buildString {
@@ -179,6 +216,8 @@ class SystemDaemonExecutionMethod(
 
     companion object {
         const val METHOD_ID = "system-daemon"
-        private const val POLL_MS = 100L
+        private const val POLL_MS = 25L
+        private const val FIELD_BEGIN = "__CT_F_B_"
+        private const val FIELD_END = "__CT_F_E_"
     }
 }

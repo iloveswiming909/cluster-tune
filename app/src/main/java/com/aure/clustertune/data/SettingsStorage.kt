@@ -287,7 +287,8 @@ internal fun supportedExecutionMethodId(methodId: String?): String? {
     // method MUST be listed here or the user's selection will never persist
     // (it reads back as null / "Not selected").
     return methodId?.takeIf {
-        it == "pserver-stdout" || it == "root-shell" || it == "jdwp-inject"
+        it == "pserver-stdout" || it == "root-shell" || it == "jdwp-inject" ||
+            it == "system-daemon"
     }
 }
 

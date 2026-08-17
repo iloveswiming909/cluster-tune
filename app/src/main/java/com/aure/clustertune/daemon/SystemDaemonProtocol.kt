@@ -69,10 +69,20 @@ object SystemDaemonProtocol {
      * version is asked to stop so the new one can take over, rather than
      * silently serving requests with stale logic.
      */
-    const val DAEMON_VERSION = 1
+    const val DAEMON_VERSION = 2
 
-    /** Daemon rewrites the heartbeat every loop; this is the loop period. */
-    const val POLL_INTERVAL_MS = 750L
+    /**
+     * Idle loop period. The daemon drops to a much shorter period while it is
+     * actively serving requests (see BURST_* below), so this only governs how
+     * quickly a request is noticed after a quiet spell.
+     */
+    const val IDLE_INTERVAL_MS = 500L
+
+    /** Loop period while bursting, i.e. shortly after any request. */
+    const val BURST_INTERVAL_MS = 40L
+
+    /** How long the daemon stays in burst mode after its last request. */
+    const val BURST_HOLD_LOOPS = 60
 
     /**
      * A heartbeat older than this means the daemon is gone. Generous relative
@@ -132,6 +142,8 @@ object SystemDaemonProtocol {
         appendLine("echo \$\$ > \"\$DIR/${PID_FILE}\"")
         appendLine("echo $version > \"\$DIR/${VERSION_FILE}\"")
         appendLine("rm -f \"\$DIR/${STOP_FILE}\" 2>/dev/null")
+        appendLine("BURST=0")
+        appendLine("BEAT=0")
         appendLine("")
         appendLine("# --- main loop -------------------------------------------------")
         appendLine("while true; do")
@@ -139,9 +151,18 @@ object SystemDaemonProtocol {
         appendLine("    rm -f \"\$DIR/${STOP_FILE}\" \"\$DIR/${PID_FILE}\" \"\$DIR/${HEARTBEAT_FILE}\" 2>/dev/null")
         appendLine("    exit 0")
         appendLine("  fi")
-        appendLine("  date +%s > \"\$DIR/${HEARTBEAT_FILE}\" 2>/dev/null")
+        appendLine("  # Heartbeat is a FUSE write, so do NOT do it every loop while")
+        appendLine("  # bursting at ${BURST_INTERVAL_MS}ms. Roughly every 2s is plenty:")
+        appendLine("  # the app treats anything under ${HEARTBEAT_STALE_MS}ms as alive.")
+        appendLine("  if [ \"\$BEAT\" -le 0 ]; then")
+        appendLine("    date +%s > \"\$DIR/${HEARTBEAT_FILE}\" 2>/dev/null")
+        appendLine("    if [ \"\$BURST\" -gt 0 ]; then BEAT=50; else BEAT=4; fi")
+        appendLine("  fi")
+        appendLine("  BEAT=\$((BEAT - 1))")
+        appendLine("  FOUND=0")
         appendLine("  for REQ in \"\$DIR\"/req-*.sh; do")
         appendLine("    [ -e \"\$REQ\" ] || continue")
+        appendLine("    FOUND=1")
         appendLine("    BASE=\$(basename \"\$REQ\")")
         appendLine("    ID=\${BASE#req-}")
         appendLine("    ID=\${ID%.sh}")
@@ -151,7 +172,20 @@ object SystemDaemonProtocol {
         appendLine("    mv \"\$DIR/tmp-\$ID.out\" \"\$DIR/res-\$ID.out\" 2>/dev/null")
         appendLine("    echo \$RC > \"\$DIR/res-\$ID.rc\"")
         appendLine("  done")
-        appendLine("  sleep 0.75")
+        appendLine("  # Burst: after any request, poll fast for a while so a run of")
+        appendLine("  # related calls (an apply plus its read-back verification) is")
+        appendLine("  # not charged a fresh idle wait each time. Falls back to the")
+        appendLine("  # idle period once things go quiet, to protect battery.")
+        appendLine("  if [ \"\$FOUND\" -eq 1 ]; then")
+        appendLine("    BURST=${BURST_HOLD_LOOPS}")
+        appendLine("  elif [ \"\$BURST\" -gt 0 ]; then")
+        appendLine("    BURST=\$((BURST - 1))")
+        appendLine("  fi")
+        appendLine("  if [ \"\$BURST\" -gt 0 ]; then")
+        appendLine("    sleep ${BURST_INTERVAL_MS / 1000.0}")
+        appendLine("  else")
+        appendLine("    sleep ${IDLE_INTERVAL_MS / 1000.0}")
+        appendLine("  fi")
         appendLine("done")
     }
 }

@@ -137,6 +137,20 @@ class PrivilegedExecutionResolver(
         return selectedMethod()?.readText(path)
     }
 
+    /**
+     * Batch read. Uses the selected method's own batching when it has any
+     * (the system daemon does, where each round trip is expensive), otherwise
+     * falls back to reading one path at a time.
+     */
+    fun readTexts(paths: List<String>): Map<String, String> {
+        if (paths.isEmpty()) return emptyMap()
+        val method = selectedMethod() ?: return emptyMap()
+        if (method is com.aure.clustertune.daemon.SystemDaemonExecutionMethod) {
+            return method.readTexts(paths)
+        }
+        return paths.mapNotNull { path -> method.readText(path)?.let { path to it } }.toMap()
+    }
+
     companion object {
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",

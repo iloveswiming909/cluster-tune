@@ -20,15 +20,43 @@ class CpuPolicyDetector(
     }
 
     fun readCurrentMaxValues(policies: List<CpuPolicyInfo>): Map<Int, Int> {
-        return policies.mapNotNull { policy ->
-            readText(policy.scalingMaxPath)?.toIntOrNull()?.let { policy.id to it }
-        }.toMap()
+        return readPolicyValues(policies) { it.scalingMaxPath }
     }
 
     fun readCurrentMinValues(policies: List<CpuPolicyInfo>): Map<Int, Int> {
-        return policies.mapNotNull { policy ->
-            readText(policy.scalingMinPath)?.toIntOrNull()?.let { policy.id to it }
-        }.toMap()
+        return readPolicyValues(policies) { it.scalingMinPath }
+    }
+
+    /**
+     * Reads one node per policy, doing the privileged part as a single batch.
+     *
+     * Unprivileged reads are attempted first and individually, because they are
+     * essentially free and usually succeed (scaling_max_freq is world-readable).
+     * Only the nodes that actually need privilege — typically scaling_min_freq,
+     * which is `-rw-rw---- system system` on the Odin 2 Mini — are grouped into
+     * one privileged call. On the file-based daemon transport that turns three
+     * round trips into one, which is the difference between a state refresh
+     * costing ~3s and ~0.1s.
+     */
+    private fun readPolicyValues(
+        policies: List<CpuPolicyInfo>,
+        pathOf: (CpuPolicyInfo) -> String,
+    ): Map<Int, Int> {
+        val values = mutableMapOf<Int, Int>()
+        val needsPrivilege = mutableListOf<CpuPolicyInfo>()
+        policies.forEach { policy ->
+            val direct = fileSystem.readText(pathOf(policy))?.trim()?.takeIf { it.isNotEmpty() }
+            val parsed = direct?.toIntOrNull()
+            if (parsed != null) values[policy.id] = parsed else needsPrivilege += policy
+        }
+        if (needsPrivilege.isNotEmpty()) {
+            val paths = needsPrivilege.map(pathOf)
+            val fetched = privilegedReader.readTexts(paths)
+            needsPrivilege.forEach { policy ->
+                fetched[pathOf(policy)]?.trim()?.toIntOrNull()?.let { values[policy.id] = it }
+            }
+        }
+        return values
     }
 
     private fun parsePolicy(policyPath: String): CpuPolicyInfo? {
