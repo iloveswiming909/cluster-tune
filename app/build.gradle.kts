@@ -35,8 +35,8 @@ android {
         applicationId = "com.aure.clustertune"
         minSdk = 31
         targetSdk = 34
-        versionCode = 308
-        versionName = "1.0.2"
+        versionCode = 313
+        versionName = "1.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -85,11 +85,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-    testOptions {
-        unitTests {
-            isReturnDefaultValues = true
-        }
     }
     packaging {
         resources {

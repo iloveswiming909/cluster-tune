@@ -2,20 +2,6 @@ package com.aure.clustertune.ui
 
 import android.graphics.drawable.Drawable
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.focusable
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRestorer
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -106,12 +92,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -134,6 +122,7 @@ import com.aure.clustertune.ui.designsystem.component.CtIcon
 import com.aure.clustertune.ui.designsystem.component.CtCompactOverlayFrame
 import com.aure.clustertune.ui.designsystem.component.CtSectionCard
 import com.aure.clustertune.ui.designsystem.component.CtSelectableRow
+import com.aure.clustertune.ui.designsystem.component.CtSelectionIndicator
 import com.aure.clustertune.ui.designsystem.component.CtStatePanel
 import com.aure.clustertune.ui.designsystem.component.CtStatePanelState
 import com.aure.clustertune.ui.designsystem.component.CtSwitch
@@ -151,6 +140,7 @@ private enum class MainTab {
 @Composable
 fun MainTunerScreen(
     state: TunerState,
+    applyingProfileId: String? = null,
     displayFrequenciesAsPercent: Boolean,
     sleepProfileId: String?,
     onApplyProfile: (PerformanceProfile) -> Unit,
@@ -161,24 +151,16 @@ fun MainTunerScreen(
     onMoveProfile: (String, Int) -> Unit,
     launchableApps: List<InstalledAppInfo>,
     recentActiveApps: List<InstalledAppInfo>,
-    onSaveAppProfileAssignment: (String, String, String?, Map<Int, Int>) -> Unit,
+    onSaveAppProfileAssignment: (String, String, String?, Map<Int, Int>, Int?) -> Unit,
     onDeleteAppProfileAssignment: (String) -> Unit,
     onRefreshInstalledApps: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSupport: () -> Unit,
-    onOpenWirelessDebugSetup: () -> Unit,
-    onConnectWirelessDebug: () -> Unit,
-    wirelessConnectStatus: String,
-    isWirelessDebugConnected: Boolean,
     onRefreshLiveValues: () -> Unit,
     onStatusMessageShown: () -> Unit,
     onErrorMessageShown: () -> Unit,
 ) {
     var dialogProfileId by remember { mutableStateOf<String?>(null) }
-    // Focus targets for the no-root setup panel so D-pad up/down chains between
-    // the two buttons instead of escaping into the nav rail.
-    val setupButtonFocus = remember { FocusRequester() }
-    val connectButtonFocus = remember { FocusRequester() }
     var selectedTab by remember { mutableStateOf(MainTab.PROFILES) }
     var appToConfigure by remember { mutableStateOf<InstalledAppInfo?>(null) }
     var showAppAssignmentDialog by remember { mutableStateOf(false) }
@@ -237,55 +219,13 @@ fun MainTunerScreen(
                 ) {
                     if (state.isLoading) {
                         LoadingClustersCard()
-                    } else if (!state.isPServerAvailable) {
+                    } else if (!state.isPrivilegedHostAvailable) {
                         Text(
                             text = "No compatible privileged execution method found",
                             style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        Text(
-                            text = "If your device isn't rooted, you can apply profiles over " +
-                                "Android's built-in Wireless debugging — no root, no PC. " +
-                                "Set it up once per boot below.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "Status: $wirelessConnectStatus",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isWirelessDebugConnected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                        Button(
-                            onClick = onOpenWirelessDebugSetup,
-                            modifier = Modifier
-                                .focusRequester(setupButtonFocus)
-                                .focusProperties { down = connectButtonFocus },
-                        ) {
-                            Text("Set up wireless debugging (no root)")
-                        }
-                        Text(
-                            text = "Already paired this boot? Just tap Connect:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Button(
-                            onClick = onConnectWirelessDebug,
-                            modifier = Modifier
-                                .focusRequester(connectButtonFocus)
-                                // Without an explicit target, the 2-D focus search
-                                // from Connect goes up-and-left into the nav rail
-                                // (it is geometrically closer) instead of back to
-                                // the Set up button directly above it.
-                                .focusProperties { up = setupButtonFocus },
-                        ) {
-                            Text("Connect")
-                        }
                     } else {
                         Box(
                             modifier = Modifier
@@ -300,9 +240,8 @@ fun MainTunerScreen(
                                     onOpenCreateProfile = { dialogProfileId = NEW_PROFILE_DIALOG_ID },
                                     onEditProfile = { dialogProfileId = it },
                                     onMoveProfile = onMoveProfile,
-                                    onActivateProfile = { profile ->
-                                        onApplyCurrent(state.copy(currentValues = profile.maxFrequencies))
-                                    },
+                                    onActivateProfile = onApplyProfile,
+                                    applyingProfileId = applyingProfileId,
                                     onEditManual = { dialogProfileId = ProfileStateResolver.MANUAL_PROFILE_ID },
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -343,14 +282,24 @@ fun MainTunerScreen(
                     mode = appOverlayMode,
                     onModeChange = { appOverlayMode = it },
                     onApplyProfile = { profile, _ ->
-                        onSaveAppProfileAssignment(app.packageName, app.label, profile.id, emptyMap())
+                        // Named profiles carry their CPU and GPU values in profile storage.
+                        // Keep the assignment declarative so later profile edits are picked up.
+                        onSaveAppProfileAssignment(app.packageName, app.label, profile.id, emptyMap(), null)
                         showAppAssignmentDialog = false
                     },
-                    onApplyCurrent = { _, profile, customValues, _ ->
-                        if (profile == null && customValues == null) {
+                    onApplyCurrent = { customState, profile, customValues, _ ->
+                        if (profile != null) {
+                            onSaveAppProfileAssignment(app.packageName, app.label, profile.id, emptyMap(), null)
+                        } else if (customValues == null && customState.currentGpuMaxFrequencyHz == null) {
                             onDeleteAppProfileAssignment(app.packageName)
                         } else {
-                            onSaveAppProfileAssignment(app.packageName, app.label, profile?.id, customValues ?: emptyMap())
+                            onSaveAppProfileAssignment(
+                                app.packageName,
+                                app.label,
+                                null,
+                                customValues ?: emptyMap(),
+                                customState.currentGpuMaxFrequencyHz,
+                            )
                         }
                         showAppAssignmentDialog = false
                     },
@@ -359,9 +308,10 @@ fun MainTunerScreen(
                     contextPackageName = app.packageName,
                     contextLabel = app.label,
                     contextIcon = app.icon,
-                    onAppProfileAssignmentChange = { profile, customValues ->
-                        if (profile == null && customValues == null) onDeleteAppProfileAssignment(app.packageName)
-                        else onSaveAppProfileAssignment(app.packageName, app.label, profile?.id, customValues ?: emptyMap())
+                    onAppProfileAssignmentChange = { profile, customValues, customGpu ->
+                        if (profile == null && customValues == null && customGpu == null) onDeleteAppProfileAssignment(app.packageName)
+                        else if (profile != null) onSaveAppProfileAssignment(app.packageName, app.label, profile.id, emptyMap(), null)
+                        else onSaveAppProfileAssignment(app.packageName, app.label, null, customValues ?: emptyMap(), customGpu)
                     },
                     showAppProfileToggle = false,
                     showAssignmentRemove = assignment != null,
@@ -375,7 +325,7 @@ fun MainTunerScreen(
     }
 
     dialogProfileId?.let { profileId ->
-        val manualProfile = remember(state.actualValues, state.policies) {
+        val manualProfile = remember(state.actualValues, state.policies, state.actualGpuMaxFrequencyHz) {
             if (state.policies.isEmpty()) {
                 null
             } else {
@@ -385,6 +335,7 @@ fun MainTunerScreen(
                     maxFrequencies = state.policies.associate { policy ->
                         policy.id to (state.actualValues[policy.id] ?: policy.currentMaxFreq)
                     },
+                    gpuMaxFrequencyHz = state.actualGpuMaxFrequencyHz,
                     source = ProfileSource.VIRTUAL,
                     isEditable = true,
                     isDeletable = false,
@@ -402,8 +353,8 @@ fun MainTunerScreen(
             creatingNewProfile = profileId == NEW_PROFILE_DIALOG_ID,
             manualMode = profileId == ProfileStateResolver.MANUAL_PROFILE_ID,
             onDismiss = { dialogProfileId = null },
-            onSave = { name, values ->
-                val editedState = state.copy(currentValues = values)
+            onSave = { name, values, gpuValue ->
+                val editedState = state.copy(currentValues = values, currentGpuMaxFrequencyHz = gpuValue)
                 when {
                     profileId == NEW_PROFILE_DIALOG_ID -> onCreateProfile(name, editedState)
                     profileId == ProfileStateResolver.MANUAL_PROFILE_ID -> onApplyCurrent(editedState)
@@ -424,9 +375,9 @@ enum class CompactOverlayMode { PROFILES, TUNER }
 
 /** Compact app-aware overlay shared by the edge picker and quick tuner. */
 @Composable
-@OptIn(ExperimentalComposeUiApi::class)
 fun CompactOverlayScreen(
     state: TunerState,
+    applyingProfileId: String? = null,
     displayFrequenciesAsPercent: Boolean,
     mode: CompactOverlayMode,
     onModeChange: (CompactOverlayMode) -> Unit,
@@ -437,7 +388,7 @@ fun CompactOverlayScreen(
     contextPackageName: String? = null,
     contextLabel: String? = null,
     contextIcon: Drawable? = null,
-    onAppProfileAssignmentChange: ((PerformanceProfile?, Map<Int, Int>?) -> Unit)? = null,
+    onAppProfileAssignmentChange: ((PerformanceProfile?, Map<Int, Int>?, Int?) -> Unit)? = null,
     showAppProfileToggle: Boolean = true,
     showAssignmentRemove: Boolean = false,
     onRemoveAssignment: (() -> Unit)? = null,
@@ -468,14 +419,20 @@ fun CompactOverlayScreen(
             ?: state.currentValues
     }
     var stagedCustomValues by remember(initialValues) { mutableStateOf(initialValues) }
+    val initialGpuValue = remember(assignment?.profileId, assignment?.customGpuMaxFrequencyHz, state.currentGpuMaxFrequencyHz) {
+        assignment?.customGpuMaxFrequencyHz
+            ?: profiles.firstOrNull { it.id == assignment?.profileId }?.gpuMaxFrequencyHz
+            ?: state.currentGpuMaxFrequencyHz
+    }
+    var stagedGpuValue by remember(initialGpuValue) { mutableStateOf(initialGpuValue) }
     var customDraft by remember(assignment?.profileId, assignment?.customMaxFrequencies) {
         mutableStateOf(assignment?.isCustom == true || (assignment == null && state.isManualSelection))
     }
     // Keep the preset selection derived from the complete staged values. This also
     // handles opening the overlay with values that already match a named profile.
-    LaunchedEffect(stagedCustomValues, state.policies, profiles) {
+    LaunchedEffect(stagedCustomValues, stagedGpuValue, state.policies, state.gpuPolicy, profiles) {
         val matchingProfile = stagedProfile?.takeIf { profile ->
-            ProfileStateResolver.matchesProfile(stagedCustomValues, profile, state.policies)
+            profileMatchesStagedValues(stagedCustomValues, profile, state, stagedGpuValue)
         } ?: listOfNotNull(
             assignment?.profileId,
             state.selectedDisplayProfileId,
@@ -483,10 +440,10 @@ fun CompactOverlayScreen(
             state.lastAppliedDisplayProfileId,
         ).asSequence().mapNotNull { id -> profiles.firstOrNull { it.id == id } }
             .firstOrNull { profile ->
-                ProfileStateResolver.matchesProfile(stagedCustomValues, profile, state.policies)
+                profileMatchesStagedValues(stagedCustomValues, profile, state, stagedGpuValue)
             }
         ?: profiles.firstOrNull { profile ->
-            ProfileStateResolver.matchesProfile(stagedCustomValues, profile, state.policies)
+            profileMatchesStagedValues(stagedCustomValues, profile, state, stagedGpuValue)
         }
         if (matchingProfile != null) {
             if (stagedProfile?.id != matchingProfile.id || customDraft) {
@@ -508,39 +465,11 @@ fun CompactOverlayScreen(
         ?: listOfNotNull(assignment?.profileId, state.activeDisplayProfileId, state.lastAppliedDisplayProfileId)
             .firstOrNull { id -> profiles.any { it.id == id } }
 
-    // Back / B must close this overlay, not fall through to the activity (which
-    // exited the whole app). Also handle ButtonB explicitly for controllers that
-    // report it separately from KEYCODE_BACK.
-    BackHandler(enabled = true) { onDismissRequest() }
-
-    val firstRowFocus = remember { FocusRequester() }
-    LaunchedEffect(mode) {
-        if (mode == CompactOverlayMode.PROFILES) {
-            kotlinx.coroutines.delay(120)
-            runCatching { firstRowFocus.requestFocus() }
-        }
-    }
-
     ScreenContainer(compactMode = true, showCompactScrim = false, compactFillHeight = false) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                // Contain controller focus inside this overlay. This screen is
-                // the app-profile picker; without containment D-pad left/right
-                // escaped to the app list / nav rail behind it and could not get
-                // back. Cancelling the group's exit blocks focus *movement* out
-                // without consuming any key, so children still receive left/right.
-                .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonB) {
-                        onDismissRequest()
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .focusProperties { exit = { FocusRequester.Cancel } }
-                .focusRestorer()
-                .focusGroup(),
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.92f),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().background(colorScheme.surfaceContainer)
@@ -588,8 +517,8 @@ fun CompactOverlayScreen(
                                     checked = appProfileEnabled,
                                     onCheckedChange = { enabled ->
                                         appProfileEnabled = enabled
-                                        if (!enabled && mode == CompactOverlayMode.PROFILES) {
-                                            onAppProfileAssignmentChange?.invoke(null, null)
+                                        if (!enabled) {
+                                            onAppProfileAssignmentChange?.invoke(null, null, null)
                                         }
                                     },
                                     modifier = Modifier.scale(0.78f),
@@ -625,41 +554,52 @@ fun CompactOverlayScreen(
             CtDivider(Modifier.fillMaxWidth(), colorScheme.outlineVariant.copy(alpha = 0.48f))
             if (mode == CompactOverlayMode.PROFILES) {
                 Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .heightIn(min = 0.dp, max = 340.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (customDraft) {
                         ProfileChoiceRow(
                             title = "Custom",
                             selected = true,
+                            applying = false,
                             onClick = { onModeChange(CompactOverlayMode.TUNER) },
-                            focusRequester = firstRowFocus,
                         )
                     }
-                    profiles.forEachIndexed { index, profile ->
+                    profiles.forEach { profile ->
                         ProfileChoiceRow(
                             title = profile.name,
                             selected = selectedProfileId == profile.id,
+                            applying = applyingProfileId == profile.id,
                             onClick = {
                                 stagedProfile = profile
+                                stagedCustomValues = profile.maxFrequencies
+                                stagedGpuValue = profile.gpuMaxFrequencyHz ?: state.currentGpuMaxFrequencyHz
+                                customDraft = false
                                 onApplyProfile(profile, appProfileEnabled)
                             },
-                            // Give the first row initial focus so the overlay opens
-                            // with the controller already inside it, instead of the
-                            // user having to press left to get in.
-                            focusRequester = if (!customDraft && index == 0) firstRowFocus else null,
                         )
                     }
                     if (profiles.isEmpty()) ProfilePickerEmptyOptionCard()
                 }
             } else {
                 Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 390.dp).verticalScroll(rememberScrollState()).padding(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .heightIn(min = 0.dp, max = 390.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     ProfileChipSelector(
                         state = state.copy(
                             currentValues = stagedCustomValues,
+                            currentGpuMaxFrequencyHz = stagedGpuValue,
                             activeDisplayProfileId = null,
                             lastAppliedDisplayProfileId = null,
                             selectedDisplayProfileId = stagedProfile?.id,
@@ -669,6 +609,7 @@ fun CompactOverlayScreen(
                             stagedProfile = profile
                             customDraft = false
                             stagedCustomValues = profile.maxFrequencies
+                            stagedGpuValue = profile.gpuMaxFrequencyHz ?: state.currentGpuMaxFrequencyHz
                             if (mode == CompactOverlayMode.PROFILES) onApplyProfile(profile, appProfileEnabled)
                         },
                         onClearSelection = {
@@ -677,13 +618,16 @@ fun CompactOverlayScreen(
                         },
                         onOpenFullApp = null,
                         stripUnderclockSuffix = true,
+                        applyingProfileId = applyingProfileId,
+                        compact = true,
                     )
                     PolicyEditorSection(
-                        state = state.copy(currentValues = stagedCustomValues),
+                        state = state.copy(currentValues = stagedCustomValues, currentGpuMaxFrequencyHz = stagedGpuValue),
                         displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                         onPolicyValueChange = { policy, value ->
                             stagedCustomValues = stagedCustomValues + (policy.id to value)
                         },
+                        onGpuValueChange = { stagedGpuValue = it },
                         compactMode = true,
                     )
                 }
@@ -691,21 +635,23 @@ fun CompactOverlayScreen(
             if (mode == CompactOverlayMode.TUNER) {
                 CtDivider(Modifier.fillMaxWidth(), colorScheme.outlineVariant.copy(alpha = 0.48f))
                 Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onDismissRequest) { Text("Cancel") }
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onDismissRequest) { Text("Cancel") }
                     Button(
                         onClick = {
                             onApplyCurrent(
-                                state.copy(currentValues = stagedCustomValues),
+                                state.copy(currentValues = stagedCustomValues, currentGpuMaxFrequencyHz = stagedGpuValue),
                                 stagedProfile.takeUnless { customDraft },
                                 stagedCustomValues.takeIf { customDraft },
                                 appProfileEnabled,
                             )
                         },
-                        enabled = state.policies.isNotEmpty() && state.isPServerAvailable,
+                        enabled = state.policies.isNotEmpty() && state.isPrivilegedHostAvailable,
                         modifier = Modifier.height(30.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
                     ) { Text("Apply") }
@@ -730,6 +676,20 @@ private fun ProfilePickerEmptyOptionCard() {
         }
     }
 }
+
+/** Matches staged values, treating a legacy profile's missing GPU as unchanged. */
+internal fun profileMatchesStagedValues(
+    values: Map<Int, Int>,
+    profile: PerformanceProfile,
+    state: TunerState,
+    gpuValue: Int?,
+): Boolean = ProfileStateResolver.matchesProfile(
+    values,
+    profile,
+    state.policies,
+    state.gpuPolicy,
+    gpuValue,
+)
 
 @Composable
 private fun LoadingClustersCard() {
@@ -1039,6 +999,8 @@ private fun Header(
 private fun CurrentFrequenciesCard(
     state: TunerState,
     displayFrequenciesAsPercent: Boolean,
+    gpuPolicy: com.aure.clustertune.model.GpuPolicyInfo?,
+    gpuValue: Int?,
     onEditManual: () -> Unit = {},
 ) {
     if (state.policies.isEmpty()) {
@@ -1074,6 +1036,9 @@ private fun CurrentFrequenciesCard(
                 },
                 policies = state.policies,
                 displayAsPercent = displayFrequenciesAsPercent,
+                gpuPolicy = gpuPolicy,
+                gpuValue = gpuValue,
+                formatTargets = false,
                 modifier = Modifier.weight(1f),
             )
             CompositionLocalProvider(
@@ -1584,7 +1549,6 @@ private fun SectionBubble(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun CenteredModalSurface(
     maxWidth: Dp,
@@ -1622,154 +1586,7 @@ private fun CenteredModalSurface(
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)),
         ) {
-            // Controller support for modals. This surface is an inline overlay
-            // rather than a real Dialog window, so focus is not captured for us:
-            //  - focusGroup bounds the 2-D focus search to the modal's contents so
-            //    D-pad up/down/left/right resolves inside it (rows AND buttons).
-            //  - focusRestorer remembers the last-focused child and restores it
-            //    when focus re-enters, so a touch doesn't leave the controller
-            //    with no target to resume from.
-            //  - BackHandler + ButtonB make a single Back/B press close the modal
-            //    rather than only dropping an inner highlight state.
-            BackHandler(enabled = true) { onDismiss() }
-            Box(
-                modifier = Modifier
-                    .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonB) {
-                            onDismiss()
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    // Trap focus inside the modal. focusGroup alone only *bounds*
-                    // the 2-D search — focus could still escape sideways to the
-                    // nav rail / profile list behind the overlay, and once out
-                    // there was no way back in. Cancelling the group's exit keeps
-                    // focus contained without consuming any key: left/right are
-                    // still delivered to children (needed for slider adjust), they
-                    // just can't move focus out of the modal.
-                    .focusProperties { exit = { FocusRequester.Cancel } }
-                    .focusRestorer()
-                    .focusGroup(),
-            ) {
-                content()
-            }
-        }
-    }
-}
-
-/**
- * Profile-name field with a controller-friendly "hover" state. When navigating by
- * D-pad the field is a plain focusable row (no keyboard), so you can pass over it
- * and move back down to the cluster cards. Pressing A/Center (or tapping) enters
- * edit mode: the real text field takes focus and the keyboard opens. Back/Enter
- * or focus loss commits and returns to hover. A directly-focusable text field
- * would force the keyboard open every time focus landed on it.
- */
-@Composable
-private fun ProfileNameField(
-    value: String,
-    onValueChange: (String) -> Unit,
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(20.dp)
-    var editing by remember { mutableStateOf(false) }
-    var hoverFocused by remember { mutableStateOf(false) }
-    val editFocus = remember { FocusRequester() }
-
-    if (editing) {
-        var everFocused by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { runCatching { editFocus.requestFocus() } }
-        // While editing, Back/B must only leave edit mode (dismissing the
-        // keyboard), NOT close the surrounding dialog. This nested BackHandler is
-        // registered deeper than the modal's, so it wins while it is enabled.
-        BackHandler(enabled = true) { editing = false }
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 62.dp)
-                .focusRequester(editFocus)
-                .onFocusChanged {
-                    if (it.isFocused) {
-                        everFocused = true
-                    } else if (everFocused) {
-                        // Only leave edit mode once focus was actually acquired and
-                        // then lost, not during the frame before requestFocus().
-                        editing = false
-                    }
-                }
-                .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown &&
-                        (event.key == Key.Back || event.key == Key.ButtonB ||
-                            event.key == Key.Enter || event.key == Key.NumPadEnter)
-                    ) {
-                        editing = false
-                        true
-                    } else {
-                        false
-                    }
-                },
-            singleLine = true,
-            label = { Text("Profile name") },
-            shape = shape,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
-                unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
-                focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                cursorColor = colorScheme.primary,
-            ),
-        )
-    } else {
-        val borderColor = if (hoverFocused) {
-            colorScheme.primary.copy(alpha = 0.82f)
-        } else {
-            colorScheme.outlineVariant.copy(alpha = 0.28f)
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 62.dp)
-                .onFocusChanged { hoverFocused = it.isFocused }
-                .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown &&
-                        (event.key == Key.DirectionCenter || event.key == Key.Enter ||
-                            event.key == Key.NumPadEnter || event.key == Key.Spacebar ||
-                            event.key == Key.ButtonA)
-                    ) {
-                        editing = true
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .focusable()
-                .clickable { editing = true }
-                .background(colorScheme.surfaceContainerHigh.copy(alpha = 0.46f), shape)
-                .border(BorderStroke(if (hoverFocused) 2.dp else 1.dp, borderColor), shape)
-                .clip(shape)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = "Profile name",
-                style = MaterialTheme.typography.bodySmall,
-                color = colorScheme.onSurfaceVariant.copy(alpha = 0.84f),
-            )
-            Text(
-                text = value.ifEmpty { "Tap or press to edit" },
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (value.isEmpty()) {
-                    colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                } else {
-                    colorScheme.onSurface
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            content()
         }
     }
 }
@@ -1778,9 +1595,9 @@ private fun ProfileNameField(
 private fun ProfileChoiceRow(
     title: String,
     selected: Boolean,
+    applying: Boolean = false,
     onClick: () -> Unit,
     compact: Boolean = false,
-    focusRequester: FocusRequester? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
@@ -1806,7 +1623,6 @@ private fun ProfileChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .background(containerBrush, rowShape)
             .border(BorderStroke(1.dp, borderColor), rowShape)
             .clip(rowShape)
@@ -1828,26 +1644,13 @@ private fun ProfileChoiceRow(
             color = titleColor,
             maxLines = 1,
         )
-        Surface(
-            modifier = Modifier.size(if (compact) 22.dp else 26.dp),
-            shape = RoundedCornerShape(999.dp),
-            color = if (selected) colorScheme.primary else Color.Transparent,
-            border = BorderStroke(
-                2.dp,
-                if (selected) colorScheme.primary else colorScheme.outline.copy(alpha = 0.78f),
-            ),
-            contentColor = colorScheme.onPrimary,
-        ) {
-            if (selected) {
-                CtIcon(
-                    symbol = "check",
-                    contentDescription = "Selected",
-                    tint = colorScheme.onPrimary,
-                    size = if (compact) 15.dp else 18.dp,
-                    modifier = Modifier.padding(if (compact) 3.dp else 4.dp),
-                )
-            }
-        }
+        CtSelectionIndicator(
+            selected = selected,
+            applying = applying,
+            size = if (compact) 22.dp else 26.dp,
+            targetSize = if (compact) 22.dp else 26.dp,
+            contentDescription = if (applying) "Applying $title" else if (selected) "Selected" else null,
+        )
     }
 }
 
@@ -1928,6 +1731,7 @@ private fun ProfileListSection(
     onEditProfile: (String) -> Unit,
     onMoveProfile: (String, Int) -> Unit,
     onActivateProfile: (PerformanceProfile) -> Unit,
+    applyingProfileId: String? = null,
     onEditManual: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1938,6 +1742,8 @@ private fun ProfileListSection(
         CurrentFrequenciesCard(
             state = state,
             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
+            gpuPolicy = state.gpuPolicy,
+            gpuValue = state.actualGpuMaxFrequencyHz,
             onEditManual = onEditManual,
         )
 
@@ -1982,9 +1788,12 @@ private fun ProfileListSection(
                             showEdit = profile.isEditable,
                             valuePreview = profile.maxFrequencies,
                             policies = state.policies,
+                            gpuPolicy = state.gpuPolicy,
+                            gpuValue = profile.gpuMaxFrequencyHz,
                             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
                             isDragging = isDragging,
                             dragActive = draggingProfileId != null,
+                            applying = applyingProfileId == profile.id,
                             onActivate = { onActivateProfile(profile) },
                             onMoveUp = if (canMove && originalIndex > 0) {
                                 { onMoveProfile(profile.id, -1) }
@@ -2099,9 +1908,12 @@ private fun ProfileListRow(
     showEdit: Boolean,
     valuePreview: Map<Int, Int>,
     policies: List<CpuPolicyInfo>,
+    gpuPolicy: com.aure.clustertune.model.GpuPolicyInfo?,
+    gpuValue: Int?,
     displayFrequenciesAsPercent: Boolean,
     isDragging: Boolean,
     dragActive: Boolean,
+    applying: Boolean = false,
     onActivate: () -> Unit,
     onMoveUp: (() -> Unit)?,
     onMoveDown: (() -> Unit)?,
@@ -2114,7 +1926,7 @@ private fun ProfileListRow(
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
     val containerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f)
-    val containerBrush = if (isApplied) {
+    val containerBrush = if (isApplied || applying) {
         Brush.horizontalGradient(
             listOf(
                 colorScheme.primaryContainer.copy(alpha = 0.24f),
@@ -2128,10 +1940,11 @@ private fun ProfileListRow(
     val borderColor = when {
         isDragging -> colorScheme.primary
         isApplied -> colorScheme.primary.copy(alpha = 0.82f)
+        applying -> colorScheme.primary.copy(alpha = 0.62f)
         isSelected -> colorScheme.primary.copy(alpha = 0.58f)
         else -> colorScheme.outlineVariant.copy(alpha = 0.28f)
     }
-    val profileNameColor = if (isApplied) borderColor else contentColor
+    val profileNameColor = if (isApplied || applying) borderColor else contentColor
     val metadataContentColor = colorScheme.onSurfaceVariant.copy(alpha = 0.84f)
 
     Row(
@@ -2189,12 +2002,15 @@ private fun ProfileListRow(
                 }
             }
             if (valuePreview.isNotEmpty()) {
-                InlineFrequencyMetadata(
-                    values = valuePreview,
-                    policies = policies,
-                    displayAsPercent = displayFrequenciesAsPercent,
-                    valueColor = metadataContentColor,
-                )
+            InlineFrequencyMetadata(
+                values = valuePreview,
+                policies = policies,
+                displayAsPercent = displayFrequenciesAsPercent,
+                valueColor = metadataContentColor,
+                gpuPolicy = gpuPolicy,
+                gpuValue = gpuValue,
+                forceNumeric = profile.id == ProfileStateResolver.STOCK_PROFILE_ID,
+            )
             }
         }
         if (showEdit) {
@@ -2211,6 +2027,8 @@ private fun ProfileListRow(
         }
         ProfileActivationControl(
             selected = isApplied,
+            applying = applying,
+            profileName = profile.name,
             onClick = onActivate,
             enabled = valuePreview.isNotEmpty() && !dragActive,
         )
@@ -2220,46 +2038,18 @@ private fun ProfileListRow(
 @Composable
 private fun ProfileActivationControl(
     selected: Boolean,
+    applying: Boolean = false,
+    profileName: String = "profile",
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-    val borderColor = when {
-        !enabled -> colorScheme.outline.copy(alpha = 0.36f)
-        selected -> colorScheme.primary
-        else -> colorScheme.outline.copy(alpha = 0.78f)
-    }
-    val fillColor = if (selected) {
-        colorScheme.primary.copy(alpha = if (enabled) 1f else 0.42f)
-    } else {
-        Color.Transparent
-    }
-
-    Box(
-        modifier = Modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            modifier = Modifier.size(26.dp),
-            shape = RoundedCornerShape(999.dp),
-            color = fillColor,
-            border = BorderStroke(2.dp, borderColor),
-            contentColor = colorScheme.onPrimary,
-        ) {
-            if (selected) {
-                CtIcon(
-                    symbol = "check",
-                    contentDescription = "Active profile",
-                    tint = colorScheme.onPrimary,
-                    size = 18.dp,
-                    modifier = Modifier.padding(4.dp),
-                )
-            }
-        }
-    }
+    CtSelectionIndicator(
+        selected = selected,
+        applying = applying,
+        enabled = enabled,
+        onClick = onClick,
+        contentDescription = if (applying) "Applying $profileName" else if (selected) "Active profile" else null,
+    )
 }
 
 @Composable
@@ -2335,6 +2125,10 @@ private fun InlineFrequencyMetadata(
     labelColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.82f),
     policies: List<CpuPolicyInfo> = emptyList(),
     displayAsPercent: Boolean = false,
+    gpuPolicy: com.aure.clustertune.model.GpuPolicyInfo? = null,
+    gpuValue: Int? = null,
+    formatTargets: Boolean = true,
+    forceNumeric: Boolean = false,
 ) {
     val policiesById = policies.associateBy { it.id }
     Row(
@@ -2364,12 +2158,36 @@ private fun InlineFrequencyMetadata(
                 )
                 val policy = policiesById[policyId]
                 Text(
-                    text = formatFrequency(
-                        valueKhz = value,
-                        boosted = policy?.isBoosted(value) == true,
-                        policy = policy,
-                        displayAsPercent = displayAsPercent,
-                    ),
+                    text = if (forceNumeric) {
+                        formatFrequency(
+                            value,
+                            boosted = policy?.isBoosted(value) == true,
+                            policy = policy,
+                            displayAsPercent = displayAsPercent,
+                            showStockLabel = false,
+                        )
+                    } else if (!formatTargets) {
+                        formatFrequency(
+                            value,
+                            boosted = policy?.isBoosted(value) == true,
+                            policy = policy,
+                            displayAsPercent = displayAsPercent,
+                            showStockLabel = false,
+                        )
+                    } else formatTargetFrequency(value, policy, displayAsPercent),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = valueColor,
+                    maxLines = 1,
+                )
+            }
+        }
+        if (gpuPolicy != null && gpuValue != null) {
+            if (values.isNotEmpty()) Text("•", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.62f))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("GPU", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = labelColor, maxLines = 1)
+                Text(
+                    if (forceNumeric || !formatTargets) formatGpuFrequency(gpuValue)
+                    else formatGpuFrequency(gpuValue, gpuPolicy),
                     style = MaterialTheme.typography.bodySmall,
                     color = valueColor,
                     maxLines = 1,
@@ -2386,6 +2204,8 @@ private fun ProfileChipSelector(
     onClearSelection: () -> Unit,
     onOpenFullApp: (() -> Unit)?,
     stripUnderclockSuffix: Boolean = false,
+    applyingProfileId: String? = null,
+    compact: Boolean = false,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(state.selectedDisplayProfileId, state.isManualSelection, state.displayProfiles) {
@@ -2417,7 +2237,9 @@ private fun ProfileChipSelector(
                     label = profile.name.displayNameForTuner(stripUnderclockSuffix),
                     isApplied = profile.id == state.activeDisplayProfileId,
                     isSelected = profile.id == state.selectedDisplayProfileId,
+                    applying = applyingProfileId == profile.id,
                     onClick = { onApplyProfile(profile) },
+                    compact = compact,
                 )
             }
             if (state.isManualSelection) {
@@ -2427,6 +2249,7 @@ private fun ProfileChipSelector(
                         isApplied = false,
                         isSelected = true,
                         onClick = onClearSelection,
+                        compact = compact,
                     )
                 }
             }
@@ -2458,10 +2281,13 @@ private fun ProfileSelectorChip(
     label: String,
     isApplied: Boolean,
     isSelected: Boolean,
+    applying: Boolean = false,
     onClick: () -> Unit,
+    compact: Boolean = false,
 ) {
     AssistChip(
         onClick = onClick,
+        modifier = if (compact) Modifier.height(28.dp) else Modifier,
         colors = when {
             isApplied -> AssistChipDefaults.assistChipColors(
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -2474,7 +2300,26 @@ private fun ProfileSelectorChip(
             isSelected -> BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
             else -> null
         },
-        label = { Text(label) },
+        label = {
+            Row(
+                modifier = if (applying) Modifier.semantics { contentDescription = "Applying $label" } else Modifier,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (compact) {
+                    Text(label, style = MaterialTheme.typography.labelMedium)
+                } else {
+                    Text(label)
+                }
+                if (applying) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+        },
     )
 }
 
@@ -2483,6 +2328,7 @@ private fun PolicyEditorSection(
     state: TunerState,
     displayFrequenciesAsPercent: Boolean,
     onPolicyValueChange: (CpuPolicyInfo, Int) -> Unit,
+    onGpuValueChange: (Int) -> Unit = {},
     compactMode: Boolean,
 ) {
     if (state.policies.isEmpty()) {
@@ -2500,6 +2346,15 @@ private fun PolicyEditorSection(
             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
         )
     }
+    state.gpuPolicy?.let { gpuPolicy ->
+        TunerGpuPolicyCard(
+            policy = gpuPolicy,
+            selectedValue = state.currentGpuMaxFrequencyHz ?: gpuPolicy.currentMaxFrequencyHz,
+            actualValue = state.actualGpuMaxFrequencyHz ?: gpuPolicy.currentMaxFrequencyHz,
+            onValueChanged = onGpuValueChange,
+            compactMode = compactMode,
+        )
+    }
 }
 
 @Composable
@@ -2510,7 +2365,7 @@ private fun ProfileEditorDialog(
     creatingNewProfile: Boolean,
     manualMode: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, Map<Int, Int>) -> Unit,
+    onSave: (String, Map<Int, Int>, Int?) -> Unit,
     onDelete: () -> Unit,
 ) {
     val initialValues = remember(profile?.id, creatingNewProfile, manualMode, baseState.actualValues) {
@@ -2524,18 +2379,16 @@ private fun ProfileEditorDialog(
     }
     var profileName by remember(profile?.id, creatingNewProfile) { mutableStateOf(profile?.name.orEmpty()) }
     var editedValues by remember(profile?.id, initialValues) { mutableStateOf(initialValues) }
+    var editedGpuValue by remember(profile?.id, creatingNewProfile, manualMode, baseState.actualGpuMaxFrequencyHz) {
+        mutableStateOf(
+                profile?.gpuMaxFrequencyHz
+                ?: if (creatingNewProfile || manualMode) baseState.actualGpuMaxFrequencyHz else null,
+        )
+    }
     var showDeleteConfirmation by remember(profile?.id) { mutableStateOf(false) }
     val colorScheme = MaterialTheme.colorScheme
 
     CenteredModalSurface(maxWidth = 900.dp, onDismiss = onDismiss) {
-        // Initial controller focus lands on the first cluster card, not the name
-        // field: focusing a text field auto-opens the soft keyboard, which is
-        // disruptive on a handheld. The name field is reachable by pressing up.
-        val firstCardFocus = remember { FocusRequester() }
-        LaunchedEffect(manualMode) {
-            kotlinx.coroutines.delay(80)
-            runCatching { firstCardFocus.requestFocus() }
-        }
         Column(modifier = Modifier.fillMaxHeight()) {
             Column(
                 modifier = Modifier
@@ -2546,13 +2399,26 @@ private fun ProfileEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (!manualMode) {
-                    ProfileNameField(
+                    OutlinedTextField(
                         value = profileName,
                         onValueChange = { profileName = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 62.dp),
+                        singleLine = true,
+                        label = { Text("Profile name") },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
+                            unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
+                            focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                            unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                            cursorColor = colorScheme.primary,
+                        ),
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    baseState.policies.forEachIndexed { index, policy ->
+                    baseState.policies.forEach { policy ->
                         TunerPolicyCard(
                             policy = policy,
                             selectedValue = editedValues[policy.id] ?: policy.currentMaxFreq,
@@ -2562,7 +2428,15 @@ private fun ProfileEditorDialog(
                             },
                             compactMode = true,
                             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
-                            focusRequester = if (index == 0) firstCardFocus else null,
+                        )
+                    }
+                    baseState.gpuPolicy?.let { gpuPolicy ->
+                        TunerGpuPolicyCard(
+                            policy = gpuPolicy,
+                            selectedValue = editedGpuValue ?: gpuPolicy.currentMaxFrequencyHz,
+                            actualValue = baseState.actualGpuMaxFrequencyHz ?: gpuPolicy.currentMaxFrequencyHz,
+                            onValueChanged = { editedGpuValue = it },
+                            compactMode = true,
                         )
                     }
                 }
@@ -2607,9 +2481,9 @@ private fun ProfileEditorDialog(
                         Button(
                             onClick = {
                                 if (manualMode) {
-                                    onSave(profile?.name.orEmpty(), editedValues)
+                                    onSave(profile?.name.orEmpty(), editedValues, editedGpuValue)
                                 } else {
-                                    onSave(profileName, editedValues)
+                                    onSave(profileName, editedValues, editedGpuValue)
                                 }
                             },
                             modifier = Modifier.height(30.dp),
@@ -2694,7 +2568,9 @@ internal fun formatFrequency(
     boosted: Boolean = false,
     policy: CpuPolicyInfo? = null,
     displayAsPercent: Boolean = false,
+    showStockLabel: Boolean = true,
 ): String {
+    if (showStockLabel && !boosted && policy != null && valueKhz == policy.selectableMaxFreq) return "Stock"
     val base = if (displayAsPercent && policy != null && policy.selectableMaxFreq > 0) {
         val percent = ((valueKhz.toFloat() / policy.selectableMaxFreq.toFloat()) * 100f).roundToInt()
         "$percent%"
@@ -2707,3 +2583,7 @@ internal fun formatFrequency(
     }
     return if (boosted) "$base+" else base
 }
+
+internal fun formatTargetFrequency(valueKhz: Int, policy: CpuPolicyInfo?, displayAsPercent: Boolean = false): String =
+    if (policy != null && valueKhz >= policy.selectableMaxFreq) "Stock"
+    else formatFrequency(valueKhz, policy = policy, displayAsPercent = displayAsPercent)

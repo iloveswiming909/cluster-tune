@@ -9,10 +9,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aure.clustertune.model.AppColorSource
 import com.aure.clustertune.model.AppSettings
+import com.aure.clustertune.model.DEFAULT_AUTOMATIC_UPDATE_CHECKS_ENABLED
 import com.aure.clustertune.model.DEFAULT_EDGE_HANDLE_HEIGHT_DP
 import com.aure.clustertune.model.DEFAULT_EDGE_HANDLE_OPACITY_PERCENT
 import com.aure.clustertune.model.DEFAULT_EDGE_HANDLE_THICKNESS_DP
 import com.aure.clustertune.model.DEFAULT_EDGE_HANDLE_VERTICAL_POSITION_PERCENT
+import com.aure.clustertune.model.DEFAULT_INCLUDE_PRERELEASE_UPDATES
 import com.aure.clustertune.model.DEFAULT_PROFILE_SWITCH_HISTORY_LIMIT
 import com.aure.clustertune.model.MAX_EDGE_HANDLE_HEIGHT_DP
 import com.aure.clustertune.model.MAX_EDGE_HANDLE_OPACITY_PERCENT
@@ -82,9 +84,11 @@ class SettingsStorage(private val context: Context) {
             sleepProfileId = preferences[sleepProfileIdKey],
             hasPromptedQuickSettingsTile = preferences[quickSettingsTilePromptShownKey] ?: false,
             isQuickSettingsTileAdded = preferences[quickSettingsTileAddedKey] ?: false,
-            automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey] ?: true,
+            automaticUpdateChecksEnabled = preferences[automaticUpdateChecksEnabledKey]
+                ?: DEFAULT_AUTOMATIC_UPDATE_CHECKS_ENABLED,
             updateCheckIntervalDays = (preferences[updateCheckIntervalDaysKey] ?: 7).coerceIn(1, 365),
-            includePrereleaseUpdates = preferences[includePrereleaseUpdatesKey] ?: false,
+            includePrereleaseUpdates = preferences[includePrereleaseUpdatesKey]
+                ?: DEFAULT_INCLUDE_PRERELEASE_UPDATES,
             lastUpdateCheckMillis = preferences[lastUpdateCheckMillisKey] ?: 0L,
             displayFrequenciesAsPercent = preferences[displayFrequenciesAsPercentKey] ?: false,
             leftEdgeProfilePickerEnabled = preferences[leftEdgeProfilePickerEnabledKey] ?: false,
@@ -283,13 +287,7 @@ class SettingsStorage(private val context: Context) {
 }
 
 internal fun supportedExecutionMethodId(methodId: String?): String? {
-    // NOTE: this whitelist silently drops unknown ids, so any new execution
-    // method MUST be listed here or the user's selection will never persist
-    // (it reads back as null / "Not selected").
-    return methodId?.takeIf {
-        it == "pserver-stdout" || it == "root-shell" || it == "jdwp-inject" ||
-            it == "system-daemon"
-    }
+    return methodId?.takeIf { it == "pserver-stdout" || it == "root-shell" }
 }
 
 internal fun normalizeEdgeHandleThicknessDp(thicknessDp: Int): Int {

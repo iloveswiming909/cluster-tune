@@ -1,10 +1,12 @@
 package com.aure.clustertune.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,7 +20,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -28,12 +29,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.res.stringResource
 import com.aure.clustertune.R
+import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
+import com.aure.clustertune.ui.WirelessDebugSetupScreen
 import com.aure.clustertune.ui.designsystem.component.CtIcon
 import com.aure.clustertune.ui.designsystem.component.CtSelectableRow
 import com.aure.clustertune.ui.designsystem.component.CtSectionCard
@@ -56,18 +60,10 @@ private val executionMethodInfo = listOf(
         labelRes = R.string.settings_execution_root,
         descriptionRes = R.string.settings_execution_root_description,
     ),
-    // No-root path via on-device wireless debugging (JDWP injection).
     ExecutionMethodInfo(
         id = "jdwp-inject",
         labelRes = R.string.settings_execution_jdwp,
         descriptionRes = R.string.settings_execution_jdwp_description,
-    ),
-    // Resident system-uid daemon bootstrapped by the JDWP path; survives Wi-Fi
-    // being turned off for the rest of the boot.
-    ExecutionMethodInfo(
-        id = "system-daemon",
-        labelRes = R.string.settings_execution_daemon,
-        descriptionRes = R.string.settings_execution_daemon_description,
     ),
 )
 
@@ -77,8 +73,10 @@ internal fun DeviceExecutionMethodCard(
     onAutoDetect: () -> Unit,
     onMethodChange: (String?) -> Unit,
     density: ClusterTuneDensity,
-    onOpenWirelessDebugSetup: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
+    var showSetup by remember { mutableStateOf(false) }
+
     SectionCard(title = stringResource(R.string.settings_execution), symbol = "terminal", density = density) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -105,17 +103,37 @@ internal fun DeviceExecutionMethodCard(
                 modifier = Modifier.weight(1f),
             )
         }
-        // When the no-root wireless-debugging method is in use, expose a way back
-        // into the pairing flow so it can be redone (the connect port changes on
-        // every boot / whenever wireless debugging is toggled).
-        if ((selectedMethodId == "jdwp-inject" || selectedMethodId == "system-daemon") &&
-            onOpenWirelessDebugSetup != null
-        ) {
-            OutlinedButton(
-                onClick = onOpenWirelessDebugSetup,
-                modifier = Modifier.fillMaxWidth(),
+
+        if (selectedMethodId == "jdwp-inject") {
+            FilledTonalButton(
+                onClick = { showSetup = true },
+                modifier = Modifier.padding(top = 8.dp),
             ) {
-                Text(text = stringResource(R.string.settings_execution_jdwp_setup))
+                Text(stringResource(R.string.settings_execution_jdwp_setup))
+            }
+        }
+    }
+
+    if (showSetup) {
+        Dialog(
+            onDismissRequest = { showSetup = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                val manager = remember { WirelessDebugConnectionManager.getInstance(context) }
+                WirelessDebugSetupScreen(
+                    connectionManager = manager,
+                    onBack = { showSetup = false },
+                    onConnectionEstablished = {
+                        Toast.makeText(
+                            context,
+                            "Wireless debugging connected",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        onAutoDetect()
+                    },
+                    isSystemDaemonAlive = { false },
+                )
             }
         }
     }
@@ -201,7 +219,6 @@ private fun PrivilegedExecutionMethodSelector(
         "pserver-stdout" -> stringResource(R.string.settings_execution_pserver)
         "root-shell" -> stringResource(R.string.settings_execution_root)
         "jdwp-inject" -> stringResource(R.string.settings_execution_jdwp)
-        "system-daemon" -> stringResource(R.string.settings_execution_daemon)
         null -> stringResource(R.string.settings_execution_not_selected)
         else -> selectedMethodId
     }
@@ -216,20 +233,14 @@ private fun PrivilegedExecutionMethodSelector(
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                modifier = Modifier.padding(horizontal = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    // weight + ellipsis: long labels (e.g. "Wireless debugging
-                    // (no root)") previously overflowed and collided with the
-                    // trailing "Change" text instead of truncating.
-                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
                     text = selectedLabel,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = stringResource(R.string.settings_change),

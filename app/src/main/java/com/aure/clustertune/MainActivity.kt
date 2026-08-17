@@ -32,11 +32,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import com.aure.clustertune.apps.AppProfileMonitorService
+import com.aure.clustertune.model.ProfileStateResolver
 import com.aure.clustertune.overlay.OverlayHostService
 import com.aure.clustertune.overlay.OverlayPermission
 import com.aure.clustertune.permissions.AppAccess
 import com.aure.clustertune.permissions.AppAccessStatus
+import com.aure.clustertune.permissions.AppProfileAccessibilityAccess
+import com.aure.clustertune.permissions.UsageStatsAccess
 import com.aure.clustertune.permissions.missingAppAccess
 import com.aure.clustertune.sleep.SleepProfileMonitorService
 import com.aure.clustertune.tile.QuickSettingsTileAddResult
@@ -45,7 +47,6 @@ import com.aure.clustertune.tile.QuickSettingsTileRefresher
 import com.aure.clustertune.ui.MainTunerScreen
 import com.aure.clustertune.ui.PermissionCheckDialog
 import com.aure.clustertune.ui.SettingsScreen
-import com.aure.clustertune.ui.WirelessDebugSetupScreen
 import com.aure.clustertune.ui.SupportScreen
 import com.aure.clustertune.ui.SingleToast
 import com.aure.clustertune.ui.TunerViewModel
@@ -64,13 +65,6 @@ class MainActivity : ComponentActivity() {
     private val container by lazy { AppContainer(this) }
     private val appUpdateManager by lazy { AppUpdateManager(this) }
     private val pendingUpdateRelease = mutableStateOf<AppRelease?>(null)
-
-    /**
-     * Set when a previously-working wireless-debugging connection is found dead
-     * on resume, so the main screen can tell the user what happened and offer to
-     * reopen setup (rather than silently showing profiles that can't be applied).
-     */
-    private val wirelessConnectionLost = mutableStateOf(false)
     private val viewModel by viewModels<TunerViewModel> {
         TunerViewModel.factory(
             repository = container.repository,
@@ -98,7 +92,6 @@ class MainActivity : ComponentActivity() {
                 if (settings.sleepProfileEnabled) {
                     SleepProfileMonitorService.start(this@MainActivity)
                 }
-                maybeStartAppProfileMonitor()
             }
         }
     }
@@ -109,7 +102,6 @@ class MainActivity : ComponentActivity() {
         maybeAutoDetectPrivilegedExecutionOnFirstRun()
         maybeCheckForUpdatesOnLaunch()
         maybeStartSleepProfileMonitor()
-        maybeStartAppProfileMonitor()
 
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
@@ -117,71 +109,15 @@ class MainActivity : ComponentActivity() {
                 ClusterTuneSystemBars()
                 Surface {
                     val state = viewModel.state.collectAsStateWithLifecycle().value
+                    val applyingProfileId = viewModel.applyingProfileId.collectAsStateWithLifecycle().value
                     val launchableApps = viewModel.launchableApps.collectAsStateWithLifecycle().value
                     val recentActiveApps = viewModel.recentActiveApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
                     var showSupport by rememberSaveable { mutableStateOf(false) }
-                    var showWirelessSetup by rememberSaveable { mutableStateOf(false) }
-                    BackHandler(enabled = showSettings || showSupport || showWirelessSetup) {
+                    BackHandler(enabled = showSettings || showSupport) {
                         showSettings = false
                         showSupport = false
-                        if (showWirelessSetup) {
-                            showWirelessSetup = false
-                            // Connecting there changes availability; re-probe.
-                            viewModel.recheckExecutionAvailability()
-                        }
                     }
-
-                    // Wireless-debug connect state surfaced on the main menu so a
-                    // device already paired this boot can reconnect without opening
-                    // the setup screen.
-                    val cm = container.wirelessDebugConnectionManager
-                    var wirelessConnectStatus by remember {
-                        mutableStateOf(
-                            if (cm.connectionInfo != null) "Connected. Ready to apply profiles." else "Not connected",
-                        )
-                    }
-                    var isWirelessDebugConnected by remember { mutableStateOf(cm.connectionInfo != null) }
-                    val onConnectWirelessDebug: () -> Unit = {
-                        wirelessConnectStatus = "Looking for wireless debugging…"
-                        // Try mDNS discovery first; if it doesn't resolve within a
-                        // few seconds, fall back to the port scan (the reliable path
-                        // on some networks).
-                        cm.startConnectDiscovery(
-                            onConnected = { info ->
-                                isWirelessDebugConnected = true
-                                wirelessConnectStatus =
-                                    "Connected (${info.host}:${info.port}). Ready to apply profiles."
-                                viewModel.recheckExecutionAvailability()
-                            },
-                            onUnavailable = {
-                                wirelessConnectStatus =
-                                    "Wireless debugging not found. Make sure it's ON, then use Set up to pair."
-                            },
-                        )
-                        lifecycleScope.launch {
-                            var waited = 0
-                            while (waited < 3000 && !isWirelessDebugConnected) {
-                                kotlinx.coroutines.delay(500)
-                                waited += 500
-                            }
-                            if (!isWirelessDebugConnected) {
-                                wirelessConnectStatus = "mDNS didn't respond; scanning directly…"
-                                cm.scanForConnectPort { info ->
-                                    if (info != null) {
-                                        isWirelessDebugConnected = true
-                                        wirelessConnectStatus =
-                                            "Connected (${info.host}:${info.port}). Ready to apply profiles."
-                                        viewModel.recheckExecutionAvailability()
-                                    } else {
-                                        wirelessConnectStatus =
-                                            "Couldn't connect. Make sure Wireless debugging is ON, or use Set up to pair."
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     var permissionRefresh by remember { mutableStateOf(0) }
                     DisposableEffect(Unit) {
                         val observer = LifecycleEventObserver { _, event ->
@@ -196,7 +132,10 @@ class MainActivity : ComponentActivity() {
                         OverlayPermission.canDrawOverlays(this@MainActivity)
                     }
                     val hasUsageAccess = remember(permissionRefresh) {
-                        AppProfileMonitorService.hasUsageStatsPermission(this@MainActivity)
+                        UsageStatsAccess.isEnabled(this@MainActivity)
+                    }
+                    val hasAppProfileAccessibilityAccess = remember(permissionRefresh) {
+                        AppProfileAccessibilityAccess.isEnabled(this@MainActivity)
                     }
                     val hasNotificationAccess = remember(permissionRefresh) {
                         NotificationManagerCompat.from(this@MainActivity)
@@ -208,6 +147,7 @@ class MainActivity : ComponentActivity() {
                     val missingAccess = missingAppAccess(
                         AppAccessStatus(
                             overlayGranted = canDrawOverlays,
+                            accessibilityGranted = hasAppProfileAccessibilityAccess,
                             usageGranted = hasUsageAccess,
                             notificationsGranted = hasNotificationAccess,
                         ),
@@ -220,51 +160,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Wireless-debugging link dropped (e.g. the user turned
-                    // wireless debugging off, or it reset on reboot). Say so
-                    // plainly and offer to reopen setup, instead of leaving a
-                    // profile list that silently fails to apply.
-                    if (wirelessConnectionLost.value) {
-                        AlertDialog(
-                            onDismissRequest = { wirelessConnectionLost.value = false },
-                            title = { Text("Wireless debugging disconnected") },
-                            text = {
-                                Text(
-                                    "ClusterTune can no longer reach Android's Wireless debugging, " +
-                                        "so profiles can't be applied. Check that Wireless debugging " +
-                                        "is still switched on, then pair again.",
-                                )
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    wirelessConnectionLost.value = false
-                                    showSettings = false
-                                    showSupport = false
-                                    showWirelessSetup = true
-                                }) { Text("Set up") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { wirelessConnectionLost.value = false }) {
-                                    Text("Dismiss")
-                                }
-                            },
-                        )
-                    }
-
-                    if (showWirelessSetup) {
-                        WirelessDebugSetupScreen(
-                            connectionManager = container.wirelessDebugConnectionManager,
-                            onBack = {
-                                showWirelessSetup = false
-                                // Connecting there changes availability; re-probe.
-                                viewModel.recheckExecutionAvailability()
-                            },
-                            onConnectionEstablished = {
-                                container.bootstrapSystemDaemonIfPossible()
-                            },
-                            isSystemDaemonAlive = { container.isSystemDaemonAlive },
-                        )
-                    } else if (showSettings) {
+                    if (showSettings) {
                         SettingsScreen(
                             settings = settings,
                             onBack = { showSettings = false },
@@ -281,7 +177,8 @@ class MainActivity : ComponentActivity() {
                             sleepProfileOptions = state.displayProfiles,
                             onSleepProfileEnabledChange = { enabled ->
                                 val profileId = settings.sleepProfileId
-                                    ?: state.displayProfiles.firstOrNull()?.id
+                                    ?.takeIf { savedId -> state.displayProfiles.any { it.id == savedId } }
+                                    ?: ProfileStateResolver.defaultSleepProfileId(state.displayProfiles)
                                 viewModel.configureSleepProfile(enabled, profileId) {
                                     if (enabled) {
                                         startSleepProfileMonitor()
@@ -309,6 +206,10 @@ class MainActivity : ComponentActivity() {
                             hasUsageAccess = hasUsageAccess,
                             onOpenUsageAccessSettings = {
                                 startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                            },
+                            hasAppProfileAccessibilityAccess = hasAppProfileAccessibilityAccess,
+                            onOpenAppProfileAccessibilitySettings = {
+                                startActivity(AppProfileAccessibilityAccess.settingsIntent())
                             },
                             hasNotificationAccess = hasNotificationAccess,
                             onOpenNotificationSettings = {
@@ -340,13 +241,13 @@ class MainActivity : ComponentActivity() {
                                                 OverlayPermission.createSettingsIntent(this@MainActivity),
                                             )
                                         }
-                                        !hasUsageAccess -> {
+                                        !hasAppProfileAccessibilityAccess -> {
                                             SingleToast.show(
                                                 this@MainActivity,
-                                                "Grant Usage Access to identify the current app",
+                                                "Enable accessibility access for app profiles",
                                                 Toast.LENGTH_LONG,
                                             )
-                                            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                                            startActivity(AppProfileAccessibilityAccess.settingsIntent())
                                         }
                                         else -> OverlayHostService.showEdgeHandle(this@MainActivity)
                                     }
@@ -373,19 +274,20 @@ class MainActivity : ComponentActivity() {
                             onProfileSwitchHistoryLimitChange = viewModel::setProfileSwitchHistoryLimit,
                             onPrivilegedExecutionMethodChange = viewModel::setPrivilegedExecutionMethod,
                             onAutoDetectPrivilegedExecutionMethod = viewModel::autoDetectPrivilegedExecutionMethod,
-                            onOpenWirelessDebugSetup = {
-                                showSettings = false
-                                showWirelessSetup = true
-                            },
                         )
                     } else if (showSupport) {
                         SupportScreen(onBack = { showSupport = false })
                     } else {
                         MainTunerScreen(
                             state = state,
+                            applyingProfileId = applyingProfileId,
                             displayFrequenciesAsPercent = settings.displayFrequenciesAsPercent,
                             sleepProfileId = settings.sleepProfileId.takeIf { settings.sleepProfileEnabled },
-                            onApplyProfile = viewModel::applyProfile,
+                            onApplyProfile = { profile ->
+                                viewModel.applyProfile(profile) {
+                                    QuickSettingsTileRefresher.requestUpdate(this@MainActivity)
+                                }
+                            },
                             onApplyCurrent = { tunerState ->
                                 viewModel.applyCurrent(tunerState) {
                                     QuickSettingsTileRefresher.requestUpdate(this@MainActivity)
@@ -397,23 +299,19 @@ class MainActivity : ComponentActivity() {
                             onMoveProfile = viewModel::moveProfile,
                             launchableApps = launchableApps,
                             recentActiveApps = recentActiveApps,
-                            onSaveAppProfileAssignment = { packageName, appLabel, profileId, customMaxFrequencies ->
+                            onSaveAppProfileAssignment = { packageName, appLabel, profileId, customMaxFrequencies, customGpuMaxFrequencyHz ->
                                 viewModel.saveAppProfileAssignment(
                                     packageName = packageName,
                                     appLabel = appLabel,
                                     profileId = profileId,
                                     customMaxFrequencies = customMaxFrequencies,
+                                    customGpuMaxFrequencyHz = customGpuMaxFrequencyHz,
                                 )
-                                startAppProfileMonitor()
                             },
                             onDeleteAppProfileAssignment = viewModel::deleteAppProfileAssignment,
                             onRefreshInstalledApps = viewModel::refreshInstalledApps,
                             onOpenSettings = { showSettings = true },
                             onOpenSupport = { showSupport = true },
-                            onOpenWirelessDebugSetup = { showWirelessSetup = true },
-                            onConnectWirelessDebug = onConnectWirelessDebug,
-                            wirelessConnectStatus = wirelessConnectStatus,
-                            isWirelessDebugConnected = isWirelessDebugConnected,
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,
                             onErrorMessageShown = viewModel::consumeErrorMessage,
@@ -426,6 +324,10 @@ class MainActivity : ComponentActivity() {
                                 when (access) {
                                     AppAccess.OVERLAY -> {
                                         startActivity(OverlayPermission.createSettingsIntent(this@MainActivity))
+                                    }
+
+                                    AppAccess.ACCESSIBILITY -> {
+                                        startActivity(AppProfileAccessibilityAccess.settingsIntent())
                                     }
 
                                     AppAccess.USAGE -> {
@@ -460,44 +362,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        // Don't leave a dangling JDWP attachment on GameAssistant. A debuggable
-        // process accepts only one debugger, so a session we fail to dispose
-        // makes every later attach time out on the handshake until that target
-        // is restarted. The adb connection itself is left intact.
-        if (isFinishing) {
-            runCatching { container.wirelessDebugConnectionManager.releaseJdwpSession() }
-            // Connect discovery now outlives the setup screen (so we can hear an
-            // adbd announcement whenever wireless debugging is toggled). Stop it
-            // here, at the end of the app's life, rather than on screen dispose.
-            runCatching { container.wirelessDebugConnectionManager.stopAll() }
-        }
-        super.onDestroy()
-    }
-
     override fun onResume() {
         super.onResume()
-        // If we believed we were connected, confirm it. verifyConnection() clears
-        // a dead connection, so this both updates availability and lets us tell
-        // the user their wireless-debugging link dropped.
-        lifecycleScope.launch {
-            val cm = container.wirelessDebugConnectionManager
-            if (cm.connectionInfo != null) {
-                val alive = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    cm.verifyConnection()
-                }
-                if (!alive) {
-                    wirelessConnectionLost.value = true
-                } else {
-                    // A live JDWP link is the only chance to start the offline
-                    // daemon. Do it now so the user can drop Wi-Fi afterwards.
-                    container.bootstrapSystemDaemonIfPossible()
-                }
-            }
-            viewModel.recheckExecutionAvailability()
-        }
         maybeStartSleepProfileMonitor()
-        maybeStartAppProfileMonitor()
         maybeStartLeftEdgeProfilePicker()
     }
 
@@ -510,22 +377,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         SleepProfileMonitorService.start(this)
-    }
-
-    private fun startAppProfileMonitor() {
-        if (!AppProfileMonitorService.hasUsageStatsPermission(this)) {
-            SingleToast.show(this, "Grant Usage Access to enable per-app profiles", Toast.LENGTH_LONG)
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            return
-        }
-        AppProfileMonitorService.start(this)
     }
 
     private fun maybeRequestQuickSettingsTileOnFirstRun() {
@@ -559,17 +410,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun maybeStartAppProfileMonitor() {
-        lifecycleScope.launch {
-            if (container.repository.observeState().first().appProfileAssignments.isNotEmpty() &&
-                AppProfileMonitorService.hasUsageStatsPermission(this@MainActivity) &&
-                hasNotificationAccess()
-            ) {
-                startAppProfileMonitor()
-            }
-        }
-    }
-
     private fun hasNotificationAccess(): Boolean =
         NotificationManagerCompat.from(this).areNotificationsEnabled()
 
@@ -579,7 +419,7 @@ class MainActivity : ComponentActivity() {
             if (
                 settings.leftEdgeProfilePickerEnabled &&
                 OverlayPermission.canDrawOverlays(this@MainActivity) &&
-                AppProfileMonitorService.hasUsageStatsPermission(this@MainActivity)
+                AppProfileAccessibilityAccess.isEnabled(this@MainActivity)
             ) {
                 OverlayHostService.showEdgeHandle(this@MainActivity)
             } else if (settings.leftEdgeProfilePickerEnabled) {

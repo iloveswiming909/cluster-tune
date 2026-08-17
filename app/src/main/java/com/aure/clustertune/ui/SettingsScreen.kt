@@ -117,6 +117,8 @@ fun SettingsScreen(
     onOpenOverlayPermissionSettings: () -> Unit,
     hasUsageAccess: Boolean,
     onOpenUsageAccessSettings: () -> Unit,
+    hasAppProfileAccessibilityAccess: Boolean,
+    onOpenAppProfileAccessibilitySettings: () -> Unit,
     hasNotificationAccess: Boolean,
     onOpenNotificationSettings: () -> Unit,
     canInstallUpdates: Boolean,
@@ -135,7 +137,6 @@ fun SettingsScreen(
     onProfileSwitchHistoryLimitChange: (Int) -> Unit,
     onPrivilegedExecutionMethodChange: (String?) -> Unit,
     onAutoDetectPrivilegedExecutionMethod: () -> Unit,
-    onOpenWirelessDebugSetup: (() -> Unit)? = null,
 ) {
     var showResetConfirmation by remember { mutableStateOf(false) }
 
@@ -250,6 +251,13 @@ fun SettingsScreen(
                 description = stringResource(R.string.settings_overlay_access_description),
                 granted = canDrawOverlays,
                 onClick = onOpenOverlayPermissionSettings,
+                missingActionLabel = stringResource(R.string.settings_grant),
+            )
+            SettingsAccessRow(
+                title = stringResource(R.string.settings_app_profile_accessibility),
+                description = stringResource(R.string.settings_app_profile_accessibility_description),
+                granted = hasAppProfileAccessibilityAccess,
+                onClick = onOpenAppProfileAccessibilitySettings,
                 missingActionLabel = stringResource(R.string.settings_grant),
             )
             SettingsAccessRow(
@@ -386,7 +394,6 @@ fun SettingsScreen(
             onAutoDetect = onAutoDetectPrivilegedExecutionMethod,
             onMethodChange = onPrivilegedExecutionMethodChange,
             density = density,
-            onOpenWirelessDebugSetup = onOpenWirelessDebugSetup,
         )
 
         SectionCard(title = stringResource(R.string.settings_profiles), symbol = "swap_vert", density = density) {
@@ -458,7 +465,6 @@ fun SettingsScreen(
 internal fun executionMethodLabel(methodId: String): String = when (methodId) {
     "pserver-stdout" -> "PServer"
     "root-shell" -> "Root"
-    "system-daemon" -> "Daemon"
     else -> methodId
 }
 
