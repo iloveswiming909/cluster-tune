@@ -134,8 +134,22 @@ internal class PServerExecutionMethod(
     override val id = "pserver-stdout"
 
     override fun probe(): ExecutionProbeResult {
-        return if (rootExec.pServerAvailable) ExecutionProbeResult(true)
-        else ExecutionProbeResult(false, "PServerBinder not available")
+        if (!rootExec.pServerAvailable) {
+            return ExecutionProbeResult(false, "PServerBinder not available")
+        }
+        // Presence is not permission — see PServerHostExecutor.verify. Reporting
+        // available here without a real transaction makes auto-detection pick
+        // PServer on devices whose SELinux policy refuses the call, which then
+        // shadows a method that does work.
+        return rootExec.verify().fold(
+            onSuccess = { ExecutionProbeResult(true) },
+            onFailure = {
+                ExecutionProbeResult(
+                    false,
+                    "PServer rejected the call (${it.message ?: "transaction failed"})",
+                )
+            },
+        )
     }
 
     override fun launchHost(request: HostLaunchRequest): Result<Unit> =

@@ -117,6 +117,67 @@ class MainActivity : ComponentActivity() {
                     var showSettings by rememberSaveable { mutableStateOf(false) }
                     var showSupport by rememberSaveable { mutableStateOf(false) }
                     var showWirelessSetup by rememberSaveable { mutableStateOf(false) }
+                    // Wireless-debug connect state surfaced on the main screen so a
+                    // device already paired this boot can reconnect without opening
+                    // the setup screen at all.
+                    val cm = container.wirelessDebugConnectionManager
+                    var isWirelessDebugConnected by remember {
+                        mutableStateOf(cm.connectionInfo != null)
+                    }
+                    var wirelessConnectStatus by remember {
+                        mutableStateOf(
+                            if (cm.connectionInfo != null) {
+                                "Connected. Ready to apply profiles."
+                            } else {
+                                "Not connected"
+                            },
+                        )
+                    }
+                    val onHostReady: () -> Unit = {
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            container.startPrivilegedHost()
+                            viewModel.recheckExecutionAvailability()
+                        }
+                    }
+                    val onConnectWirelessDebug: () -> Unit = {
+                        wirelessConnectStatus = "Looking for wireless debugging…"
+                        // mDNS first; if it does not resolve within a few seconds
+                        // fall back to the port scan, which is the reliable path on
+                        // some networks.
+                        cm.startConnectDiscovery(
+                            onConnected = { info ->
+                                isWirelessDebugConnected = true
+                                wirelessConnectStatus =
+                                    "Connected (${info.host}:${info.port}). Starting privileged host…"
+                                onHostReady()
+                            },
+                            onUnavailable = {
+                                wirelessConnectStatus =
+                                    "Wireless debugging not found. Make sure it's ON, then use Set up to pair."
+                            },
+                        )
+                        lifecycleScope.launch {
+                            var waited = 0
+                            while (waited < 3000 && !isWirelessDebugConnected) {
+                                kotlinx.coroutines.delay(500)
+                                waited += 500
+                            }
+                            if (!isWirelessDebugConnected) {
+                                wirelessConnectStatus = "mDNS didn't respond; scanning directly…"
+                                cm.scanForConnectPort { info ->
+                                    if (info != null) {
+                                        isWirelessDebugConnected = true
+                                        wirelessConnectStatus =
+                                            "Connected (${info.host}:${info.port}). Starting privileged host…"
+                                        onHostReady()
+                                    } else {
+                                        wirelessConnectStatus =
+                                            "Couldn't connect. Make sure Wireless debugging is ON, or use Set up to pair."
+                                    }
+                                }
+                            }
+                        }
+                    }
                     BackHandler(enabled = showSettings || showSupport || showWirelessSetup) {
                         // Pop one level at a time. The wireless setup screen is
                         // reached FROM settings, so closing both at once would
@@ -185,10 +246,8 @@ class MainActivity : ComponentActivity() {
                             // Off the main thread: launching blocks on the
                             // injection and on waiting for the handoff.
                             onConnectionEstablished = {
-                                lifecycleScope.launch(Dispatchers.IO) {
-                                    container.startPrivilegedHost()
-                                    viewModel.recheckExecutionAvailability()
-                                }
+                                isWirelessDebugConnected = true
+                                onHostReady()
                             },
                             isHostRunning = { container.isPrivilegedHostRunning },
                         )
@@ -345,6 +404,10 @@ class MainActivity : ComponentActivity() {
                             onDeleteAppProfileAssignment = viewModel::deleteAppProfileAssignment,
                             onRefreshInstalledApps = viewModel::refreshInstalledApps,
                             onOpenSettings = { showSettings = true },
+                            onOpenWirelessDebugSetup = { showWirelessSetup = true },
+                            onConnectWirelessDebug = onConnectWirelessDebug,
+                            wirelessConnectStatus = wirelessConnectStatus,
+                            isWirelessDebugConnected = isWirelessDebugConnected,
                             onOpenSupport = { showSupport = true },
                             onRefreshLiveValues = viewModel::refreshLiveState,
                             onStatusMessageShown = viewModel::consumeStatusMessage,

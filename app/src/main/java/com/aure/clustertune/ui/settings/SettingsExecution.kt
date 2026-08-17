@@ -38,6 +38,7 @@ import com.aure.clustertune.ui.designsystem.component.CtSectionCard
 import com.aure.clustertune.ui.designsystem.token.ClusterTuneDensity
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.style.TextOverflow
 
 private data class ExecutionMethodInfo(
     val id: String,
@@ -220,14 +221,21 @@ private fun PrivilegedExecutionMethodSelector(
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
+                    // weight + ellipsis: long labels (e.g. "Wireless debugging
+                    // (no root)") otherwise overflow and collide with the
+                    // trailing "Change" text instead of truncating, which reads
+                    // as garbled overlapping glyphs.
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
                     text = selectedLabel,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = stringResource(R.string.settings_change),
