@@ -303,10 +303,44 @@ public final class ClusterTuneHostEntry {
             return new HostCapabilities(cpus, gpu);
         }
 
+        /**
+         * Whether this host process can actually change a node.
+         *
+         * Existence is not control. On the no-root path the host runs as
+         * uid=system, and /sys/class/kgsl/kgsl-3d0/max_gpuclk is root-owned:
+         * the node reads fine, so discovery advertised a GPU domain, but every
+         * apply then died on "chmod ... Operation not permitted" and took the
+         * CPU writes with it.
+         *
+         * Controllable means either the node is already writable, or we own it
+         * and can therefore chmod it writable. Deciding this at runtime keeps
+         * GPU control working wherever it genuinely works (root, PServer) and
+         * silently drops it only where it cannot.
+         */
+        private boolean canControl(String path) {
+            try {
+                int uid = android.system.Os.getuid();
+                if (uid == 0) {
+                    return true;
+                }
+                if (android.system.Os.stat(path).st_uid == uid) {
+                    return true;
+                }
+                return android.system.Os.access(path, android.system.OsConstants.W_OK);
+            } catch (Throwable ignored) {
+                return false;
+            }
+        }
+
         private GpuDomain discoverKgslGpu() {
             File kgsl = new File("/sys/class/kgsl/kgsl-3d0");
             File maxPath = new File(kgsl, "max_gpuclk");
             if (!maxPath.isFile()) {
+                return null;
+            }
+            if (!canControl(maxPath.getPath())) {
+                log("gpu kgsl-3d0 present but not controllable at uid=" + android.os.Process.myUid()
+                        + "; omitting GPU domain");
                 return null;
             }
             List<Long> frequencies = readFreqs(new File(kgsl, "gpu_available_frequencies"));
@@ -341,6 +375,10 @@ public final class ClusterTuneHostEntry {
                     continue;
                 }
                 File maxPath = new File(entry, "max_freq");
+                if (maxPath.isFile() && !canControl(maxPath.getPath())) {
+                    log("gpu " + entry.getName() + " present but not controllable; skipping");
+                    continue;
+                }
                 if (!maxPath.isFile()) {
                     continue;
                 }

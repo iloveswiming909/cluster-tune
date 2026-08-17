@@ -1,6 +1,7 @@
 package com.aure.clustertune.root.host
 
 import android.system.Os
+import android.system.OsConstants
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -11,6 +12,26 @@ interface HostFilesystem {
     fun mode(path: String): Int?
     fun chmod(path: String, mode: Int): Boolean
     fun exists(path: String): Boolean
+
+    /**
+     * Whether this process could successfully chmod [path].
+     *
+     * chmod requires ownership or CAP_FOWNER. The host may be running as
+     * uid=system rather than root (the no-root JDWP path), and some sysfs nodes
+     * are owned by root — notably /sys/class/kgsl/kgsl-3d0/max_gpuclk, which
+     * produced "chmod ... to 0644: Operation not permitted" and aborted the
+     * whole apply, CPU work included.
+     *
+     * Defaults to true so existing implementations and fakes are unchanged.
+     */
+    fun canChmod(path: String): Boolean = true
+
+    /**
+     * Whether this process can realistically change [path]: either it is
+     * already writable, or we own it and can chmod it writable.
+     */
+    fun canControl(path: String): Boolean = true
+
     fun lastMutationError(): String? = null
     fun lastMutationFailure(): Throwable? = null
     fun mutate(operations: List<HostMutation>): Boolean {
@@ -57,6 +78,15 @@ class RealHostFilesystem @JvmOverloads constructor(
     }
     override fun exists(path: String): Boolean = File(path).isFile
 
+    override fun canChmod(path: String): Boolean = runCatching {
+        val uid = Os.getuid()
+        uid == 0 || Os.stat(path).st_uid == uid
+    }.getOrDefault(false)
+
+    override fun canControl(path: String): Boolean = runCatching {
+        canChmod(path) || Os.access(path, OsConstants.W_OK)
+    }.getOrDefault(false)
+
     override fun mutate(operations: List<HostMutation>): Boolean {
         mutationError = null
         mutationFailure = null
@@ -69,11 +99,17 @@ class RealHostFilesystem @JvmOverloads constructor(
             operations.forEach { operation ->
                 when (operation) {
                     is HostMutation.Chmod -> {
+                        // Non-fatal. Under `set -e` a refused chmod used to abort
+                        // the entire batch, so one un-chmod-able node (a
+                        // root-owned GPU path, with the host running as system)
+                        // took every CPU write down with it. A chmod that
+                        // actually mattered still surfaces, because every write
+                        // is read back and verified immediately after.
                         append("chmod ")
                             .append(shellQuote(Integer.toOctalString(operation.mode and 0x1ff)))
                             .append(' ')
                             .append(shellQuote(operation.path))
-                            .append("; ")
+                            .append(" 2>/dev/null || :; ")
                     }
 
                     is HostMutation.Write -> {
@@ -557,7 +593,13 @@ class HostApplyEngine(private val fs: HostFilesystem) {
         val actual = fs.read(path)?.toLongOrNull()
         check(actual != null && actual in targets) { "verification failed for $id: expected=${targets.joinToString("/")} actual=$actual" }
         val actualMode = fs.mode(path)
-        check(actualMode == mode) { "permission verification failed for $id: expected=$mode actual=$actualMode" }
+        // Only assert the protection mode when we could have set it. If chmod is
+        // not permitted for us on this node, the mode simply stays as the kernel
+        // shipped it, which is no worse than stock — failing the apply over it
+        // would discard a write that actually succeeded.
+        check(actualMode == mode || !fs.canChmod(path)) {
+            "permission verification failed for $id: expected=$mode actual=$actualMode"
+        }
     }
 
     private fun restoreNode(path: String, value: Long, originalMode: Int?, restoreValue: Boolean = true, fallbackValues: List<Long> = emptyList()): Boolean {
