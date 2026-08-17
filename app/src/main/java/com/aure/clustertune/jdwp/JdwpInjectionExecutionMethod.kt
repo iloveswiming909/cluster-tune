@@ -48,6 +48,43 @@ class JdwpInjectionExecutionMethod(
     @Volatile
     private var cachedProbe: Pair<Long, ExecutionProbeResult>? = null
 
+    /**
+     * Paths whose last read came back empty, with the time it happened.
+     *
+     * Some sysfs nodes are simply not readable by us: on the Odin 2 Mini
+     * scaling_min_freq (every policy) and scaling_max_freq (policy0) ship as
+     * 0660 system:system, and neither the app's uid nor the adb shell user is
+     * system. The live-state flow reads those nodes once a second, and each
+     * failure fired a SECOND shell command to log the diagnostic — six adb
+     * round-trips per second, indefinitely, for values that were never going
+     * to arrive.
+     *
+     * Retrying is still worth doing occasionally, because an apply changes the
+     * mode (the apply script now adds other-read), so entries expire after
+     * [UNREADABLE_TTL_MS] and all are dropped after a successful injection.
+     *
+     * These live on the COMPANION, not the instance. AppContainer is built by
+     * MainActivity, the overlay service and the boot receiver, and only
+     * WirelessDebugConnectionManager is a true process-wide singleton — each
+     * container builds its own resolver and therefore its own copy of this
+     * class. Per-instance caches meant two containers each logged the same
+     * diagnostic and each kept re-reading the same dead path, which is exactly
+     * what the 17:50:14 and 17:50:15 duplicate diagnostics show.
+     */
+    private val unreadablePaths = Companion.unreadablePaths
+
+    /** Paths whose `ls -lZ` diagnostic has already been logged in this process. */
+    private val diagnosedPaths = Companion.diagnosedPaths
+
+    private fun isKnownUnreadable(path: String): Boolean {
+        val seenAt = unreadablePaths[path] ?: return false
+        if (System.currentTimeMillis() - seenAt > UNREADABLE_TTL_MS) {
+            unreadablePaths.remove(path)
+            return false
+        }
+        return true
+    }
+
     override fun probe(): ExecutionProbeResult {
         // Cheap probe: this is called frequently (state refreshes, app-monitor),
         // so it must NOT open a wireless adb connection every time — doing so
@@ -92,9 +129,13 @@ class JdwpInjectionExecutionMethod(
             Log.w(TAG, "executeScript: no wireless connection")
             return Result.failure(IllegalStateException("Wireless debugging not connected"))
         }
-        return synchronized(shellUseLock) {
+        val status = prepareStatusFile()
+        val result = synchronized(shellUseLock) {
         runCatching {
-            val scriptPath = stageScript(scriptName, scriptContents)
+            val scriptPath = stageScript(
+                scriptName,
+                if (status != null) wrapForStatus(scriptContents, status.absolutePath) else scriptContents,
+            )
             Log.d(TAG, "executeScript: staged '$scriptName' -> $scriptPath (${scriptContents.length} bytes)")
             val shell = sharedShellProvider?.invoke()
             val injector = persistentInjector
@@ -127,6 +168,10 @@ class JdwpInjectionExecutionMethod(
             }
             Log.d(TAG, "executeScript: injection dispatched OK")
             com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("APPLY/jdwp: injection dispatched OK")
+            // An apply script chmods the nodes it touches, so a path that was
+            // unreadable a moment ago may be readable now. Forget every
+            // suppression and let the next read find out.
+            unreadablePaths.clear()
             null
         }.onFailure {
             Log.w(TAG, "executeScript: FAILED", it)
@@ -134,6 +179,9 @@ class JdwpInjectionExecutionMethod(
             shellInvalidator?.invoke()
         }
         }
+        // Outside the lock on purpose — see readAndLogStatus.
+        if (result.isSuccess) readAndLogStatus(status)
+        return result
     }
 
     /**
@@ -143,6 +191,10 @@ class JdwpInjectionExecutionMethod(
      */
     override fun readText(path: String): String? {
         connectionProvider() ?: return null
+        // Do not spend an adb round-trip (plus a diagnostic round-trip) on a
+        // node we already know we cannot read. Callers treat null exactly as
+        // they treated the empty read, so behaviour is unchanged.
+        if (isKnownUnreadable(path)) return null
         // Reads do NOT need system privileges — the adb shell user can read these
         // sysfs nodes directly. The previous implementation performed a FULL JDWP
         // injection per read (findTargetPid, connect2jdwp, attach, Runtime.exec,
@@ -175,18 +227,61 @@ class JdwpInjectionExecutionMethod(
         runCatching {
             // Markers make parsing robust against the shell echoing the command
             // back (which is what corrupted the old line-index parsing).
+            // The markers are SPLIT in the command text ("" is removed by the
+            // shell). So the echoed command contains __CT_READ""_BEGIN__ while
+            // only the real output contains __CT_READ_BEGIN__. Searching for the
+            // joined form therefore can never match the echo — which matters
+            // because the adb "shell:" service allocates a PTY that echoes input
+            // and hard-wraps it with backspace control characters.
             val raw = shell.sendShellCommand(
-                "echo $READ_BEGIN; cat '${path}' 2>/dev/null; echo $READ_END",
+                "echo __CT_READ\"\"_BEGIN__; cat '${path}' 2>/dev/null; " +
+                    "echo __CT_READ\"\"_END__",
             )
-            val lines = raw.lines()
-            val begin = lines.indexOfLast { it.trim() == READ_BEGIN }
-            if (begin < 0) return@runCatching null
-            val end = lines.drop(begin + 1).indexOfFirst { it.trim() == READ_END }
-            if (end < 0) return@runCatching null
-            lines.subList(begin + 1, begin + 1 + end)
-                .joinToString("\n")
+            // Strip terminal control noise (backspaces / CR) before parsing.
+            val clean = raw.replace("\b", "").replace("\r", "")
+            val beginIdx = clean.lastIndexOf(READ_BEGIN)
+            if (beginIdx < 0) return@runCatching null
+            val afterBegin = beginIdx + READ_BEGIN.length
+            val endIdx = clean.indexOf(READ_END, afterBegin)
+            if (endIdx < 0) return@runCatching null
+            val value = clean.substring(afterBegin, endIdx)
                 .trim()
                 .takeIf { it.isNotEmpty() }
+            if (value == null) {
+                // The read produced nothing. stderr was being discarded, so the
+                // real reason (permission denied, I/O error, missing node) was
+                // invisible. Re-run capturing stderr plus the file mode/owner so
+                // the cause is in the log. This is what identified the cause:
+                // `-rw-rw---- system system` plus `cat: Permission denied`, i.e.
+                // a DAC problem, not a transport one.
+                //
+                // Log it ONCE per path per process. The mode does not change
+                // between reads, so repeating the diagnostic at 1 Hz only
+                // doubled the traffic and buried the rest of the log.
+                unreadablePaths[path] = System.currentTimeMillis()
+                if (diagnosedPaths.add(path)) {
+                    runCatching {
+                        val diag = shell.sendShellCommand(
+                            "echo __CT_READ\"\"_BEGIN__; ls -lZ '${path}' 2>&1; " +
+                                "cat '${path}' 2>&1; echo __CT_READ\"\"_END__",
+                        ).replace("\b", "").replace("\r", "")
+                        // Keep the tail, not the head: the command itself is
+                        // echoed back first on some shells and would otherwise
+                        // consume the whole budget before `ls -lZ` output.
+                        val trimmed = diag.replace("\n", " | ").let { line ->
+                            if (line.length > 400) line.takeLast(400) else line
+                        }
+                        com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                            "readText('${path}') EMPTY — diag: $trimmed " +
+                                "(further reads of this path are suppressed for " +
+                                "${UNREADABLE_TTL_MS / 1000}s)",
+                        )
+                    }
+                }
+            } else {
+                unreadablePaths.remove(path)
+            }
+            value
         }.getOrElse { error ->
             com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
                 "readText('${path}') failed: ${error.javaClass.simpleName}: ${error.message}",
@@ -218,18 +313,27 @@ class JdwpInjectionExecutionMethod(
     // ---- internals ----
 
     private fun findTargetPid(adb: AdbClient): Int = runCatching {
-        val raw = adb.sendShellCommand(
-            "ps -A -o PID,NAME | grep -w ${targetPackage} | awk 'NR==1{print \$1}'"
-        )
+        // Marker-delimited so the PTY's echo of this very command can't be
+        // mistaken for output (the shell echoes input and wraps it with
+        // backspaces — that is what produced the garbled `raw=` in logs).
+        val rawOut = adb.sendShellCommand(
+            "echo __CT_READ\"\"_BEGIN__; pidof ${targetPackage}; echo __CT_READ\"\"_END__",
+        ).replace("\b", "").replace("\r", "")
+        val b = rawOut.lastIndexOf(READ_BEGIN)
+        val e = if (b >= 0) rawOut.indexOf(READ_END, b + READ_BEGIN.length) else -1
+        val raw = if (b >= 0 && e > b) {
+            rawOut.substring(b + READ_BEGIN.length, e)
+        } else {
+            rawOut
+        }
         // Do NOT assume the pid is on a fixed line. This used to read line index
         // 1 unconditionally, which only holds when the shell echoes something
         // first — on a freshly opened shell it doesn't, so the pid landed on
         // line 0 and we reported "GameAssistant is not running" while it was
         // demonstrably running. Scan every line for the first plausible pid.
-        val pid = raw.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .mapNotNull { it.toIntOrNull() }
+        // pidof returns space-separated pids; take the first valid one.
+        val pid = raw.split(Regex("\\s+"))
+            .mapNotNull { it.trim().toIntOrNull() }
             .firstOrNull { it > 0 }
             ?: 0
         com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
@@ -295,17 +399,137 @@ class JdwpInjectionExecutionMethod(
         return f.absolutePath
     }
 
+    /**
+     * Creates (or truncates) the status file the wrapped script writes into.
+     *
+     * The APP creates it, not the script, so the app is guaranteed to be able to
+     * read it back: a file that GameAssistant creates in shared storage is not
+     * reliably readable by us. We only need the system side to be able to write
+     * into a file that already exists, which [setWritable] with `ownerOnly=false`
+     * allows.
+     */
+    private fun prepareStatusFile(): File? = runCatching {
+        val f = File(sharedDirFile(), STATUS_FILE_NAME)
+        f.writeText("")
+        f.setReadable(true, false)
+        f.setWritable(true, false)
+        f
+    }.getOrNull()
+
+    /**
+     * Wraps an apply script so the fire-and-forget injection stops being blind.
+     *
+     * The JDWP path has no stdout — the injected `Runtime.exec` runs inside
+     * GameAssistant and nothing comes back — so until now a script that failed
+     * halfway looked identical to one that succeeded, and the only signal was
+     * the read-back. That is precisely the ambiguity in the policy0 reports: we
+     * could not tell a failed write from a successful write we could not read.
+     *
+     * The wrapper redirects everything into a file the app owns and adds:
+     *  - `id`, proving the script really is running as uid=system;
+     *  - `ls -lZ` of every ceiling/floor node BEFORE and AFTER the writes, which
+     *    is the on-device equivalent of the adb command that identified the 0660
+     *    stock mode;
+     *  - `set -x`, so each command and each variable expansion is traced —
+     *    including `mode=0660`, the value that decides everything;
+     *  - the real exit code. The script body runs in a SUBSHELL so its `set -e`
+     *    can abort the body without stopping the wrapper from reporting.
+     */
+    private fun wrapForStatus(contents: String, statusPath: String): String = buildString {
+        append("exec > '").append(statusPath).append("' 2>&1\n")
+        append("echo ").append(STATUS_BEGIN).append("\n")
+        append("id\n")
+        append("ls -lZ ").append(SYSFS_NODE_GLOB).append("\n")
+        append("echo ").append(STATUS_BEFORE_END).append("\n")
+        append("set -x\n")
+        append("(\n")
+        append(contents)
+        append("\n)\n")
+        append("ct_rc=\$?\n")
+        append("set +x\n")
+        append("echo ct-rc=\$ct_rc\n")
+        append("ls -lZ ").append(SYSFS_NODE_GLOB).append("\n")
+        append("echo ").append(STATUS_END).append("\n")
+    }
+
+    /**
+     * Waits briefly for the injected script to finish, then logs what it did.
+     *
+     * Called OUTSIDE the shell lock: the apply path and every verification read
+     * contend for it, and holding it while polling a file would stall them.
+     */
+    private fun readAndLogStatus(status: File?) {
+        if (status == null) return
+        var text = ""
+        val deadline = System.currentTimeMillis() + STATUS_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            text = runCatching { status.readText() }.getOrDefault("")
+            if (text.contains(STATUS_END)) break
+            runCatching { Thread.sleep(STATUS_POLL_MS) }
+        }
+        if (text.isBlank()) {
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                "APPLY/status: script produced no output within ${STATUS_WAIT_MS}ms " +
+                    "(did the injected exec run at all?)",
+            )
+            return
+        }
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val rc = lines.firstOrNull { it.startsWith("ct-rc=") }?.removePrefix("ct-rc=")
+        val completed = text.contains(com.aure.clustertune.root.PerformanceCommandBuilder.COMPLETION_MARKER)
+        val truncated = !text.contains(STATUS_END)
+        com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+            "APPLY/status: rc=${rc ?: "?"} completionMarker=$completed" +
+                if (truncated) " (script still running or died: no end marker)" else "",
+        )
+        // The node listings and anything that looks like a failure are always
+        // logged; the full command trace only when something actually went
+        // wrong, so a healthy apply costs a handful of lines instead of forty.
+        val healthy = rc == "0" && completed && !truncated
+        lines.forEach { line ->
+            val isListing = line.contains("scaling_max_freq") || line.contains("scaling_min_freq")
+            val isIdentity = line.startsWith("uid=")
+            val isProblem = line.contains("Permission denied") || line.contains("ct-policy-failed") ||
+                line.startsWith("Failed to write") || line.contains("Read-only") ||
+                line.contains("No such file") || line.contains("Invalid argument") ||
+                line.contains("Operation not permitted")
+            if (isListing || isIdentity || isProblem || !healthy) {
+                if (line != STATUS_BEGIN && line != STATUS_END && line != STATUS_BEFORE_END) {
+                    com.wuyr.jdwp_injector.debug.JdwpDebugLog.d("APPLY/status| $line")
+                }
+            }
+        }
+    }
+
     private fun unavailable(reason: String) =
         ExecutionProbeResult(isAvailable = false, supportsStdout = false, failureReason = reason)
 
     companion object {
         const val TAG = "ClusterTuneJdwp"
         private const val PROBE_CACHE_MS = 5000L
+
+        /** How long an empty read suppresses further reads of the same path. */
+        private const val UNREADABLE_TTL_MS = 60_000L
+
+        /** Process-wide; see the instance aliases for why these cannot be per-instance. */
+        private val unreadablePaths = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val diagnosedPaths = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private const val READ_BEGIN = "__CT_READ_BEGIN__"
         private const val READ_END = "__CT_READ_END__"
         const val GAME_ASSISTANT_PKG = "com.odin2.gameassistant"
 
         private const val SHARED_DIR_NAME = "ClusterScripts"
+
+        /** Where the injected script's own output is captured. */
+        private const val STATUS_FILE_NAME = "ct-apply-status.txt"
+        private const val STATUS_BEGIN = "ct-status-begin"
+        private const val STATUS_BEFORE_END = "ct-status-before-end"
+        private const val STATUS_END = "ct-status-end"
+        private const val STATUS_WAIT_MS = 1200L
+        private const val STATUS_POLL_MS = 50L
+        private const val SYSFS_NODE_GLOB =
+            "/sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq " +
+                "/sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq"
 
         /**
          * Reuses the same public-storage handoff location as OdinScriptHandoff:

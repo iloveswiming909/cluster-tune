@@ -323,27 +323,42 @@ class PerformanceRepository(
                             ProfileStateResolver.isPolicyValueSatisfied(policy, requestedValue, actualValue)
                     )
                 }
-                val minsMatch = policies.all { policy ->
-                    // An UNKNOWN minimum is not a failure. This check is a 1.0.2
-                    // addition supporting the minimum-repair migration; what we
-                    // actually apply here is the maximum. On the no-root path
-                    // scaling_min_freq often can't be read, so this returned false
-                    // forever: the log showed the maxes matching exactly at
-                    // attempt 2 yet the loop running to attempt 11 and reporting
-                    // "CPU policy verification failed" on an apply that worked.
-                    val actualMin = actualMinValues[policy.id] ?: return@all true
-                    val actualMax = actualValues[policy.id] ?: return@all false
-                    actualMin > 0 && actualMin <= actualMax &&
-                        actualMin <= (filtered[policy.id] ?: actualMax)
+                // The minimum is LOGGED, never gated on.
+                //
+                // Now that the floors are readable, the log shows something that
+                // settles this: they move on their own. policy3 sat at 1920000,
+                // dropped to 1785600 when a lower ceiling forced the kernel to
+                // clamp it, then returned to 1920000 once the ceiling rose —
+                // a vendor service is writing these nodes between our read
+                // attempts. The kernel already guarantees min <= max, so this
+                // check could never catch anything the maximum read-back misses;
+                // all it could do is lose a race and fail an apply that worked.
+                if (actualMinValues.isNotEmpty()) {
+                    val raised = policies.filter { policy ->
+                        val actualMin = actualMinValues[policy.id] ?: return@filter false
+                        actualMin > (filtered[policy.id] ?: Int.MAX_VALUE)
+                    }
+                    if (raised.isNotEmpty()) {
+                        com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                            "APPLY/verify attempt=$attempt floor above requested ceiling on " +
+                                raised.joinToString { "C${it.id}" } + " min=$actualMinValues",
+                        )
+                    }
                 }
-                if (maxesMatch && minsMatch) {
+                if (maxesMatch) {
                     verified = true
                     break
                 }
             }
             if (!verified) {
                 throw IllegalStateException(
-                    buildVerificationFailureDetail(policies, filtered, actualValues, actualMinValues),
+                    buildVerificationFailureDetail(
+                        policies,
+                        filtered,
+                        actualValues,
+                        actualMinValues,
+                        tolerateObservedMax = isReset || allowObservedMaxValues,
+                    ),
                 )
             }
             if (persistNormalState) {
@@ -762,6 +777,7 @@ class PerformanceRepository(
         requested: Map<Int, Int>,
         actualMax: Map<Int, Int>,
         actualMin: Map<Int, Int>,
+        tolerateObservedMax: Boolean,
     ): String {
         val problems = policies.mapNotNull { policy ->
             val want = requested[policy.id]
@@ -769,8 +785,16 @@ class PerformanceRepository(
             when {
                 want == null -> null
                 got == null -> "C${policy.id}: could not read back (wanted $want)"
-                got != want -> "C${policy.id}: wanted $want but is $got"
-                else -> null
+                got == want -> null
+                // Use the SAME rule the verification loop used. On a Stock reset
+                // the kernel legitimately lands on the top selectable bin rather
+                // than the observed ceiling (e.g. 2707200 for a 2803200 request),
+                // and the loop accepts that — but this builder compared with
+                // strict equality, so a failure caused by ONE policy was reported
+                // as three, and user-submitted logs pointed at the wrong cluster.
+                tolerateObservedMax &&
+                    ProfileStateResolver.isPolicyValueSatisfied(policy, want, got) -> null
+                else -> "C${policy.id}: wanted $want but is $got"
             }
         }
         com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(

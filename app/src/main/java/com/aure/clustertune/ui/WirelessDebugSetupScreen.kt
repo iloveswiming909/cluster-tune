@@ -73,11 +73,28 @@ fun WirelessDebugSetupScreen(
      * JDWP link is up. Defaults to a no-op so previews/tests need no change.
      */
     onConnectionEstablished: () -> Unit = {},
+    /**
+     * Whether the offline system daemon is currently serving requests.
+     *
+     * Without this the screen was actively misleading: with Wi-Fi off there is
+     * no adb connection, so it said "Not connected" while profiles were in fact
+     * applying perfectly through the daemon. Reported as confusing, and it is.
+     */
+    isSystemDaemonAlive: () -> Boolean = { false },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var devOptionsEnabled by remember { mutableStateOf(isDevOptionsEnabled(context)) }
+    // Cheap (a file mtime check), so polling it is fine and keeps the banner
+    // truthful if the daemon is started or lost while this screen is open.
+    var daemonAlive by remember { mutableStateOf(isSystemDaemonAlive()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            daemonAlive = isSystemDaemonAlive()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
     var status by remember { mutableStateOf("Not connected") }
     var pairingReady by remember { mutableStateOf(false) }
     var pairingCode by remember { mutableStateOf("") }
@@ -252,6 +269,16 @@ fun WirelessDebugSetupScreen(
                 "Status: $status",
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
             )
+
+            // The adb connection and the daemon are independent. Once the
+            // daemon is up, applies no longer need adb at all, so "Not
+            // connected" on its own would misrepresent a fully working setup.
+            if (daemonAlive) {
+                Text(
+                    "✓ Offline daemon running — profiles apply without Wi-Fi. " +
+                        "An adb connection is only needed to start it again after a reboot.",
+                )
+            }
 
             if (connected) {
                 Text("✓ Ready. ClusterTune can now apply profiles. Return and select a profile.")

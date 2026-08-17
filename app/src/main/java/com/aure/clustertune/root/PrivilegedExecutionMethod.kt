@@ -107,8 +107,23 @@ class PrivilegedExecutionResolver(
         }
         cachedMethod = null
         cachedProbe = null
+        // Probe durations are logged because auto-detection is on the cold-start
+        // path: until it returns, the UI cannot tell "still detecting" from
+        // "nothing available" and briefly shows the no-method setup prompt. The
+        // ordering puts the su and PServer probes ahead of the daemon's (which
+        // is a single file-mtime check), and the root probe carries a 10s
+        // timeout, so one of those is the likely cost — but that is a guess
+        // until these numbers say so. Do not tune the order on a hunch.
         orderedMethods().forEach { method ->
+            val startedAt = System.currentTimeMillis()
             val probe = method.probe()
+            val elapsed = System.currentTimeMillis() - startedAt
+            if (elapsed >= SLOW_PROBE_LOG_THRESHOLD_MS) {
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                    "probe(${method.id}): ${elapsed}ms available=${probe.isAvailable}" +
+                        (probe.failureReason?.let { " reason=$it" } ?: ""),
+                )
+            }
             if (probe.isAvailable) {
                 cachedMethod = method
                 cachedProbe = probe
@@ -152,6 +167,9 @@ class PrivilegedExecutionResolver(
     }
 
     companion object {
+        /** Probes slower than this are logged; cold-start detection blocks on them. */
+        private const val SLOW_PROBE_LOG_THRESHOLD_MS = 250L
+
         val DEFAULT_AUTO_DETECTION_ORDER = listOf(
             "pserver-stdout",
             "root-shell",

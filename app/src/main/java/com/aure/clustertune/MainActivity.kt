@@ -262,6 +262,7 @@ class MainActivity : ComponentActivity() {
                             onConnectionEstablished = {
                                 container.bootstrapSystemDaemonIfPossible()
                             },
+                            isSystemDaemonAlive = { container.isSystemDaemonAlive },
                         )
                     } else if (showSettings) {
                         SettingsScreen(
