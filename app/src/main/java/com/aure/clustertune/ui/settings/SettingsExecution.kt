@@ -1,12 +1,10 @@
 package com.aure.clustertune.ui.settings
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,19 +27,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.res.stringResource
 import com.aure.clustertune.R
-import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
-import com.aure.clustertune.ui.WirelessDebugSetupScreen
 import com.aure.clustertune.ui.designsystem.component.CtIcon
 import com.aure.clustertune.ui.designsystem.component.CtSelectableRow
 import com.aure.clustertune.ui.designsystem.component.CtSectionCard
 import com.aure.clustertune.ui.designsystem.token.ClusterTuneDensity
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.OutlinedButton
 
 private data class ExecutionMethodInfo(
     val id: String,
@@ -73,10 +69,14 @@ internal fun DeviceExecutionMethodCard(
     onAutoDetect: () -> Unit,
     onMethodChange: (String?) -> Unit,
     density: ClusterTuneDensity,
+    /**
+     * Opens the wireless-debugging pairing screen. Null hides the button, so
+     * callers that have no navigation host (previews, tests) need no change.
+     */
+    onOpenWirelessDebugSetup: (() -> Unit)? = null,
+    /** True while the privileged host is running and serving requests. */
+    isHostRunning: () -> Boolean = { false },
 ) {
-    val context = LocalContext.current
-    var showSetup by remember { mutableStateOf(false) }
-
     SectionCard(title = stringResource(R.string.settings_execution), symbol = "terminal", density = density) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -103,36 +103,23 @@ internal fun DeviceExecutionMethodCard(
                 modifier = Modifier.weight(1f),
             )
         }
-
-        if (selectedMethodId == "jdwp-inject") {
-            FilledTonalButton(
-                onClick = { showSetup = true },
-                modifier = Modifier.padding(top = 8.dp),
+        if (selectedMethodId == "jdwp-inject" && onOpenWirelessDebugSetup != null) {
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onOpenWirelessDebugSetup,
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.settings_execution_jdwp_setup))
             }
-        }
-    }
-
-    if (showSetup) {
-        Dialog(
-            onDismissRequest = { showSetup = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Surface(modifier = Modifier.fillMaxSize()) {
-                val manager = remember { WirelessDebugConnectionManager.getInstance(context) }
-                WirelessDebugSetupScreen(
-                    connectionManager = manager,
-                    onBack = { showSetup = false },
-                    onConnectionEstablished = {
-                        Toast.makeText(
-                            context,
-                            "Wireless debugging connected",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                        onAutoDetect()
-                    },
-                    isSystemDaemonAlive = { false },
+            // The adb connection and the privileged host are independent: once
+            // the host is up it serves over Binder and needs no network, so
+            // reporting only the connection state would call a fully working
+            // setup "not connected" the moment Wi-Fi goes off.
+            if (isHostRunning()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_execution_jdwp_host_running),
+                    fontWeight = FontWeight.Bold,
                 )
             }
         }

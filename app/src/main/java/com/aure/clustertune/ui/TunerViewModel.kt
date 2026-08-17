@@ -479,6 +479,22 @@ class TunerViewModel(
         }
     }
 
+    /**
+     * Silent re-probe used after the wireless-setup screen changes connection
+     * state. Unlike [autoDetectPrivilegedExecutionMethod] this neither persists
+     * the detected id nor posts a user-facing message — the user did not ask
+     * for a detection, we are just noticing that availability may have changed.
+     */
+    fun recheckExecutionAvailability() {
+        viewModelScope.launch {
+            val id = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+                "recheckExecutionAvailability: detected=${id ?: "null"}",
+            )
+            repository.refreshLiveValues()
+        }
+    }
+
     fun refreshLiveState() {
         repository.refreshLiveValues()
     }

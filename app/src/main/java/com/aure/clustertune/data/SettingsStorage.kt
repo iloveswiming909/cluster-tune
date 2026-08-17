@@ -287,7 +287,13 @@ class SettingsStorage(private val context: Context) {
 }
 
 internal fun supportedExecutionMethodId(methodId: String?): String? {
-    return methodId?.takeIf { it == "pserver-stdout" || it == "root-shell" }
+    // Any new execution method MUST be listed here. An id missing from this
+    // whitelist is silently dropped on read, so the picker appears to accept a
+    // selection and then reports "Not selected" - a trap this fork hit once
+    // already with the jdwp method.
+    return methodId?.takeIf {
+        it == "pserver-stdout" || it == "root-shell" || it == "jdwp-inject"
+    }
 }
 
 internal fun normalizeEdgeHandleThicknessDp(thicknessDp: Int): Int {

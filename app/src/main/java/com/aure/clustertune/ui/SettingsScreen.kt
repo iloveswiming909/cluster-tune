@@ -119,6 +119,10 @@ fun SettingsScreen(
     onOpenUsageAccessSettings: () -> Unit,
     hasAppProfileAccessibilityAccess: Boolean,
     onOpenAppProfileAccessibilitySettings: () -> Unit,
+    /** Opens the wireless-debugging pairing screen; null hides the entry point. */
+    onOpenWirelessDebugSetup: (() -> Unit)? = null,
+    /** True while the privileged host is running and serving requests. */
+    isHostRunning: () -> Boolean = { false },
     hasNotificationAccess: Boolean,
     onOpenNotificationSettings: () -> Unit,
     canInstallUpdates: Boolean,
@@ -394,6 +398,8 @@ fun SettingsScreen(
             onAutoDetect = onAutoDetectPrivilegedExecutionMethod,
             onMethodChange = onPrivilegedExecutionMethodChange,
             density = density,
+            onOpenWirelessDebugSetup = onOpenWirelessDebugSetup,
+            isHostRunning = isHostRunning,
         )
 
         SectionCard(title = stringResource(R.string.settings_profiles), symbol = "swap_vert", density = density) {

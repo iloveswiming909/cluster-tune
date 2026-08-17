@@ -69,6 +69,16 @@ class ClusterTuneHostClient(
     val selectedMethodId: String?
         get() = attachedMethod ?: resolver.configuredMethodIdSnapshot
 
+    /**
+     * Whether a live host binder is currently attached.
+     *
+     * Deliberately cheap and non-blocking: it inspects the cached binder only
+     * and never calls [ensureStarted], so UI can poll it without risking a host
+     * launch on the main thread.
+     */
+    val isRunning: Boolean
+        get() = binder?.isBinderAlive == true
+
     private val lock = START_LOCKS.computeIfAbsent(Process.myUid()) { Any() }
     private val serviceName = HostProtocol.SERVICE_PREFIX + Process.myUid()
     private val generation = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime }.getOrDefault(0L)

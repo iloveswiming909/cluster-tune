@@ -1,8 +1,6 @@
 package com.aure.clustertune.root
 
 import android.content.Context
-import com.aure.clustertune.jdwp.JdwpInjectionExecutionMethod
-import com.aure.clustertune.jdwp.WirelessDebugConnectionManager
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -94,24 +92,33 @@ class PrivilegedExecutionResolver(
     }
 
     companion object {
+        // jdwp-inject is tried last: it is the no-root fallback, and unlike the
+        // other two it needs a wireless-debugging connection to start the host.
         val DEFAULT_AUTO_DETECTION_ORDER = listOf("pserver-stdout", "root-shell", "jdwp-inject")
 
-        fun default(context: Context): PrivilegedExecutionResolver {
-            val rootExec = RootExec()
-            val jdwpManager = WirelessDebugConnectionManager.getInstance(context)
-            return PrivilegedExecutionResolver(
-                listOf(
-                    PServerExecutionMethod(rootExec),
-                    RootShellExecutionMethod(),
-                    JdwpInjectionExecutionMethod(
-                        connectionProvider = jdwpManager.provider(),
-                        sharedShellProvider = jdwpManager::sharedShell,
-                        shellInvalidator = jdwpManager::invalidateShell,
-                        shellUseLock = jdwpManager.shellUseLock,
-                        persistentInjector = jdwpManager::injectExecPersistent,
-                    ),
-                ),
+        fun default(
+            context: Context,
+            jdwpConnectionProvider: (() -> com.aure.clustertune.jdwp.AdbConnectionInfo?)? = null,
+            jdwpSharedShellProvider: (() -> com.wuyr.jdwp_injector.adb.AdbClient?)? = null,
+            jdwpShellInvalidator: (() -> Unit)? = null,
+            jdwpPersistentInjector: ((String, String, Int, () -> Unit) -> Boolean)? = null,
+            jdwpShellUseLock: Any = Any(),
+        ): PrivilegedExecutionResolver {
+            val methods = mutableListOf<PrivilegedExecutionMethod>(
+                PServerExecutionMethod(RootExec()),
+                RootShellExecutionMethod(),
             )
+            if (jdwpConnectionProvider != null) {
+                methods += com.aure.clustertune.jdwp.JdwpHostExecutionMethod(
+                    context = context,
+                    connectionProvider = jdwpConnectionProvider,
+                    sharedShellProvider = jdwpSharedShellProvider,
+                    shellInvalidator = jdwpShellInvalidator,
+                    persistentInjector = jdwpPersistentInjector,
+                    shellUseLock = jdwpShellUseLock,
+                )
+            }
+            return PrivilegedExecutionResolver(methods)
         }
     }
 }

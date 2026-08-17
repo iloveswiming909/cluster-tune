@@ -59,6 +59,8 @@ import com.aure.clustertune.update.UpdateCheckPolicy
 import com.aure.clustertune.update.UpdateCheckResult
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import com.aure.clustertune.ui.WirelessDebugSetupScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -114,9 +116,20 @@ class MainActivity : ComponentActivity() {
                     val recentActiveApps = viewModel.recentActiveApps.collectAsStateWithLifecycle().value
                     var showSettings by rememberSaveable { mutableStateOf(false) }
                     var showSupport by rememberSaveable { mutableStateOf(false) }
-                    BackHandler(enabled = showSettings || showSupport) {
-                        showSettings = false
-                        showSupport = false
+                    var showWirelessSetup by rememberSaveable { mutableStateOf(false) }
+                    BackHandler(enabled = showSettings || showSupport || showWirelessSetup) {
+                        // Pop one level at a time. The wireless setup screen is
+                        // reached FROM settings, so closing both at once would
+                        // drop the user to the main screen instead of back to
+                        // where they opened it from.
+                        when {
+                            showWirelessSetup -> {
+                                showWirelessSetup = false
+                                viewModel.recheckExecutionAvailability()
+                            }
+                            showSupport -> showSupport = false
+                            else -> showSettings = false
+                        }
                     }
                     var permissionRefresh by remember { mutableStateOf(0) }
                     DisposableEffect(Unit) {
@@ -160,10 +173,31 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (showSettings) {
+                    if (showWirelessSetup) {
+                        WirelessDebugSetupScreen(
+                            connectionManager = container.wirelessDebugConnectionManager,
+                            onBack = {
+                                showWirelessSetup = false
+                                viewModel.recheckExecutionAvailability()
+                            },
+                            // A live adb link is the only window in which the
+                            // privileged host can be started, so start it here.
+                            // Off the main thread: launching blocks on the
+                            // injection and on waiting for the handoff.
+                            onConnectionEstablished = {
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    container.startPrivilegedHost()
+                                    viewModel.recheckExecutionAvailability()
+                                }
+                            },
+                            isHostRunning = { container.isPrivilegedHostRunning },
+                        )
+                    } else if (showSettings) {
                         SettingsScreen(
                             settings = settings,
                             onBack = { showSettings = false },
+                            onOpenWirelessDebugSetup = { showWirelessSetup = true },
+                            isHostRunning = { container.isPrivilegedHostRunning },
                             onColorSourceChange = viewModel::setColorSource,
                             onAccentColorChange = viewModel::setAccentColor,
                             onCustomAccentColorChange = viewModel::setCustomAccentColor,

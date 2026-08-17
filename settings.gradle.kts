@@ -18,4 +18,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ClusterTune"
-include(":app", ":jdwp-injector")
+include(":app")
+include(":jdwp-injector")

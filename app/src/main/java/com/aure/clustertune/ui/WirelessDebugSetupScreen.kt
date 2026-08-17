@@ -68,30 +68,30 @@ fun WirelessDebugSetupScreen(
     connectionManager: WirelessDebugConnectionManager,
     onBack: () -> Unit,
     /**
-     * Invoked whenever a live connection is established. Used to bootstrap the
-     * resident system daemon at the only moment it can be started — while the
-     * JDWP link is up. Defaults to a no-op so previews/tests need no change.
+     * Invoked whenever a live connection is established. This is the only
+     * moment the privileged host can be started, so it is where the launch is
+     * kicked off. Defaults to a no-op so previews/tests need no change.
      */
     onConnectionEstablished: () -> Unit = {},
     /**
-     * Whether the offline system daemon is currently serving requests.
+     * Whether the privileged host is running and serving requests.
      *
      * Without this the screen was actively misleading: with Wi-Fi off there is
      * no adb connection, so it said "Not connected" while profiles were in fact
-     * applying perfectly through the daemon. Reported as confusing, and it is.
+     * applying perfectly through the host. Reported as confusing, and it is.
      */
-    isSystemDaemonAlive: () -> Boolean = { false },
+    isHostRunning: () -> Boolean = { false },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var devOptionsEnabled by remember { mutableStateOf(isDevOptionsEnabled(context)) }
-    // Cheap (a file mtime check), so polling it is fine and keeps the banner
-    // truthful if the daemon is started or lost while this screen is open.
-    var daemonAlive by remember { mutableStateOf(isSystemDaemonAlive()) }
+    // Cheap (a cached binder liveness check), so polling is fine and keeps the
+    // banner truthful if the host starts or dies while this screen is open.
+    var hostRunning by remember { mutableStateOf(isHostRunning()) }
     LaunchedEffect(Unit) {
         while (true) {
-            daemonAlive = isSystemDaemonAlive()
+            hostRunning = isHostRunning()
             kotlinx.coroutines.delay(1_000)
         }
     }
@@ -270,13 +270,14 @@ fun WirelessDebugSetupScreen(
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
             )
 
-            // The adb connection and the daemon are independent. Once the
-            // daemon is up, applies no longer need adb at all, so "Not
-            // connected" on its own would misrepresent a fully working setup.
-            if (daemonAlive) {
+            // The adb connection and the privileged host are independent. Once
+            // the host is up, applies travel over Binder and need no adb at all,
+            // so "Not connected" alone would misrepresent a working setup.
+            if (hostRunning) {
                 Text(
-                    "✓ Offline daemon running — profiles apply without Wi-Fi. " +
+                    "✓ Privileged host running — profiles apply without Wi-Fi. " +
                         "An adb connection is only needed to start it again after a reboot.",
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 )
             }
 
