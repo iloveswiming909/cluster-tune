@@ -123,6 +123,10 @@ class AppContainer(context: Context) {
         // anything asks whether a privileged executor is available, otherwise the
         // first check races the host's re-announcement and reports "not
         // available" for a host that is alive and well.
+        // Detection must be able to see a host that is already running, which is
+        // what makes Auto detect work with Wi-Fi off.
+        privilegedExecutionResolver.runningHostMethodProvider = { hostClient.runningMethodId }
+
         runCatching {
             hostClient.listenForAdoption()
             // Ask an orphaned host to re-announce. Harmless when none is running:

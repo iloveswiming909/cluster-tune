@@ -525,6 +525,12 @@ class WirelessDebugConnectionManager private constructor(
                 JdwpDebugLog.d("connect: adb handshake OK -> CONNECTED $host:$port")
                 connectOnConnected?.invoke(info)
             } else {
+                // Drop it from the fast path. adbd picks a new connect port every
+                // time wireless debugging is toggled, so a remembered port
+                // outlives its usefulness; without this the "try what worked
+                // last time" shortcut would keep handing back a dead port and
+                // every retry paid a failed handshake before falling through.
+                forgetPort(port)
                 JdwpDebugLog.w(
                     "connect: resolved $host:$port but adb handshake FAILED " +
                         "(not paired yet) — staying disconnected",
@@ -758,6 +764,13 @@ class WirelessDebugConnectionManager private constructor(
      */
     private fun rememberedPorts(): List<Int> = synchronized(rememberedPortLock) {
         rememberedPortList.toList()
+    }
+
+    /** Removes a port that no longer completes an adb handshake. */
+    private fun forgetPort(port: Int) = synchronized(rememberedPortLock) {
+        if (rememberedPortList.remove(port)) {
+            prefs?.edit()?.putString(KEY_REMEMBERED_PORTS, rememberedPortList.joinToString(","))?.apply()
+        }
     }
 
     private fun rememberPort(port: Int) = synchronized(rememberedPortLock) {

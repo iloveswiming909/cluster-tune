@@ -28,6 +28,16 @@ class PrivilegedExecutionResolver(
     private val lock = Any()
     @Volatile private var generation = 0L
     private var cachedMethod: PrivilegedExecutionMethod? = null
+
+    /**
+     * Reports the method a live privileged host is attached through, if any.
+     *
+     * Set by AppContainer once the host client exists. Consulted before probing
+     * so an already-working host always wins; it never calls back into the
+     * resolver, so there is no cycle.
+     */
+    @Volatile
+    var runningHostMethodProvider: (() -> String?)? = null
     @Volatile private var configuredMethodId: String? = null
 
     val isAvailable: Boolean get() = selectedMethod() != null
@@ -75,6 +85,23 @@ class PrivilegedExecutionResolver(
         if (!forceReprobe) cachedMethod?.let { return it }
         cachedMethod = null
         val byId = methods.associateBy { it.id }
+        // A host that is already running is proof, not a prediction.
+        //
+        // Probing asks "could this method start a host now", which for
+        // jdwp-inject means "is there a live wireless-debugging connection". With
+        // Wi-Fi off that is false even while the host it started is up and
+        // serving — so Auto detect reported nothing available and the app claimed
+        // no privileged execution method, on a device that was applying profiles
+        // perfectly. Trusting the running host also stops detection from tearing
+        // down something that works in favour of something that merely probes.
+        runningHostMethodProvider?.invoke()?.let { runningId ->
+            byId[runningId]?.let { method ->
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+                    "selectBestMethod: host already running via $runningId; keeping it",
+                )
+                return method.also { cachedMethod = it }
+            }
+        }
         for (method in autoDetectionOrder.mapNotNull(byId::get)) {
             // Timed because detection sits on the cold path for both app start
             // and the quick tile: nothing can be applied until it returns. Which

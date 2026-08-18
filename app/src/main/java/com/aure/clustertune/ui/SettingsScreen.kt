@@ -104,6 +104,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.scale
+import com.aure.clustertune.ui.designsystem.component.rememberCtAdjustable
+import com.aure.clustertune.ui.designsystem.component.animatedScale
+import com.aure.clustertune.ui.designsystem.component.ctAdjustable
 
 @Composable
 fun SettingsScreen(
@@ -727,13 +730,13 @@ private fun EdgeHandleSlider(
     var lastEmittedValue by remember(value) { mutableIntStateOf(value) }
     val roundedValue = pendingValue.roundToInt()
 
-    // Same hover-then-edit contract as every other slider in the app: D-pad
-    // moves between controls, A/Center enters adjust mode, left/right step the
-    // value only while adjusting, A again (or moving away) commits. Without
-    // this these four controls were reachable but not operable on a controller.
+    // Shared hover-then-adjust contract (see CtAdjustable), so this control and
+    // the tuner cards cannot drift apart again. A/Center enters adjust mode and
+    // grows the control, left/right step, up/down are swallowed while adjusting
+    // so focus cannot escape mid-edit, and B leaves adjust mode instead of
+    // falling through to the screen's back handling and exiting Settings.
     val interactionSource = remember { MutableInteractionSource() }
-    var focused by remember { mutableStateOf(false) }
-    var adjusting by remember { mutableStateOf(false) }
+    val adjustable = rememberCtAdjustable()
 
     fun stepBy(delta: Int) {
         val next = (roundedValue + delta).coerceIn(valueRange.first, valueRange.last)
@@ -745,41 +748,21 @@ private fun EdgeHandleSlider(
     }
 
     val outline = when {
-        adjusting -> MaterialTheme.colorScheme.primary
-        focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+        adjustable.adjusting -> MaterialTheme.colorScheme.primary
+        adjustable.focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
         else -> Color.Transparent
     }
-    // Grow slightly on entering adjust mode. A border alone gave no feedback that
-    // pressing A had actually done anything; the tuner cards already animate a
-    // 1.02 scale on focus, so this uses the same idea with a distinct step for
-    // "now editing" so the two states are told apart at a glance.
-    val sliderScale by animateFloatAsState(
-        targetValue = if (adjusting) 1.06f else if (focused) 1.02f else 1f,
-        label = "edgeHandleSliderScale",
-    )
+    val sliderScale = adjustable.animatedScale()
 
     Column(
         modifier = modifier
             .scale(sliderScale)
-            .border(BorderStroke(if (focused || adjusting) 2.dp else 0.dp, outline), RoundedCornerShape(10.dp))
+            .border(
+                BorderStroke(if (adjustable.focused || adjustable.adjusting) 2.dp else 0.dp, outline),
+                RoundedCornerShape(10.dp),
+            )
             .padding(4.dp)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (!it.isFocused) adjusting = false
-            }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Spacebar, Key.ButtonA -> {
-                        adjusting = !adjusting
-                        true
-                    }
-                    Key.DirectionLeft -> if (adjusting) { stepBy(-1); true } else false
-                    Key.DirectionRight -> if (adjusting) { stepBy(1); true } else false
-                    else -> false
-                }
-            }
-            .focusable(interactionSource = interactionSource),
+            .ctAdjustable(adjustable, interactionSource, onStep = ::stepBy),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

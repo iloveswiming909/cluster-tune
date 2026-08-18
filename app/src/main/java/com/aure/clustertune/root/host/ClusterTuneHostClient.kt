@@ -65,6 +65,16 @@ class ClusterTuneHostClient(
     private val context: Context,
     private val resolver: PrivilegedExecutionResolver,
 ) {
+    /**
+     * The method a live host is actually attached through, or null if none is.
+     *
+     * Distinct from [selectedMethodId], which falls back to the configured
+     * preference. This one is evidence rather than intent, so it is safe for the
+     * resolver to consult without creating a loop.
+     */
+    val runningMethodId: String?
+        get() = if (binder?.isBinderAlive == true) attachedMethod else null
+
     /** The lifecycle method currently selected for starting the host. */
     val selectedMethodId: String?
         get() = attachedMethod ?: resolver.configuredMethodIdSnapshot
@@ -118,13 +128,28 @@ class ClusterTuneHostClient(
     fun ensureStarted(timeoutMs: Long = 3000): Result<Unit> = synchronized(lock) {
         runCatching {
             val configuredMethod = resolver.configuredMethodIdSnapshot
-            binder?.takeIf { it.isBinderAlive && (configuredMethod == null || attachedMethod == configuredMethod) }?.let {
+            // Can anything actually start a replacement host right now?
+            //
+            // This gates every destructive step below. Switching execution method
+            // with Wi-Fi off used to tear down a perfectly good host to honour the
+            // new choice, then fail to start its replacement, and switching back
+            // did not help because the old host had already been stopped. A
+            // running host is worth more than a preference that cannot currently
+            // be acted on, so when nothing can replace it we keep it and let the
+            // preference take effect the next time a host genuinely needs starting.
+            val canStartReplacement = resolver.selectionSnapshot().methodId != null
+            val methodMatters = canStartReplacement && configuredMethod != null
+            binder?.takeIf {
+                it.isBinderAlive && (!methodMatters || attachedMethod == configuredMethod)
+            }?.let {
                 return@runCatching
             }
             detach()
             (HostRendezvous.lookup(serviceName) ?: service())?.let { existing ->
                 val legacyService = HostRendezvous.lookup(serviceName) == null
-                val pingAttempt = runCatching { ping(existing, configuredMethod) }
+                val pingAttempt = runCatching {
+                    ping(existing, configuredMethod.takeIf { methodMatters })
+                }
                 val pingFailure = pingAttempt.exceptionOrNull()
                 if (pingAttempt.isSuccess) {
                     if (!legacyService) sendLease(existing)
@@ -132,7 +157,8 @@ class ClusterTuneHostClient(
                     return@runCatching
                 }
                 val remoteVersion = (pingFailure as? HostProtocolMismatch)?.remoteVersion
-                if (remoteVersion != null || pingFailure is HostIdentityMismatch) {
+                // Only replace a live host when a replacement can be started.
+                if ((remoteVersion != null || pingFailure is HostIdentityMismatch) && canStartReplacement) {
                     runCatching { transact(existing, HostProtocol.STOP, wireVersion = remoteVersion ?: HostProtocol.VERSION, expectedVersion = remoteVersion ?: HostProtocol.VERSION) { } }
                     detach(existing)
                     check(waitForServiceReplacement(existing, timeoutMs)) { "previous privileged host is still registered" }
@@ -143,21 +169,22 @@ class ClusterTuneHostClient(
                 }
             }
             val selection = resolver.selectionSnapshot()
-            if (selection.methodId == null) {
-                // Nothing can start a host right now — but one may already be
-                // running from a previous app process and simply not have
-                // re-announced itself yet. Waiting here is the difference
-                // between "profiles work offline after a restart" and "you must
-                // turn wireless debugging back on".
-                HostRendezvous.listen(context, serviceName, generation)
-                com.aure.clustertune.jdwp.JdwpHostExecutionMethod.requestAdoption()
-                awaitAdoption(ADOPTION_WAIT_MS)?.let { adopted ->
-                    val pingAttempt = runCatching { ping(adopted, null) }
-                    if (pingAttempt.isSuccess) {
-                        sendLease(adopted)
-                        attach(adopted, pingAttempt.getOrThrow().method, requireLegacyService = false)
-                        return@runCatching
-                    }
+            // Always try to adopt before launching.
+            //
+            // A host may already be running from a previous app process, or from
+            // before the user changed execution method, and simply not have
+            // re-announced itself yet. This used to run only when no method was
+            // available at all, so after switching method and back the app went
+            // straight to "launch a new one" — which needs wireless debugging —
+            // even though the original host was still alive and adoptable.
+            HostRendezvous.listen(context, serviceName, generation)
+            com.aure.clustertune.jdwp.JdwpHostExecutionMethod.requestAdoption()
+            awaitAdoption(ADOPTION_WAIT_MS)?.let { adopted ->
+                val pingAttempt = runCatching { ping(adopted, null) }
+                if (pingAttempt.isSuccess) {
+                    sendLease(adopted)
+                    attach(adopted, pingAttempt.getOrThrow().method, requireLegacyService = false)
+                    return@runCatching
                 }
             }
             val method = selection.methodId ?: error("no privileged execution method")
