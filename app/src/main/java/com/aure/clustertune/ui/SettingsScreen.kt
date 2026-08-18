@@ -102,6 +102,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.scale
 
 @Composable
 fun SettingsScreen(
@@ -747,9 +749,18 @@ private fun EdgeHandleSlider(
         focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
         else -> Color.Transparent
     }
+    // Grow slightly on entering adjust mode. A border alone gave no feedback that
+    // pressing A had actually done anything; the tuner cards already animate a
+    // 1.02 scale on focus, so this uses the same idea with a distinct step for
+    // "now editing" so the two states are told apart at a glance.
+    val sliderScale by animateFloatAsState(
+        targetValue = if (adjusting) 1.06f else if (focused) 1.02f else 1f,
+        label = "edgeHandleSliderScale",
+    )
 
     Column(
         modifier = modifier
+            .scale(sliderScale)
             .border(BorderStroke(if (focused || adjusting) 2.dp else 0.dp, outline), RoundedCornerShape(10.dp))
             .padding(4.dp)
             .onFocusChanged {

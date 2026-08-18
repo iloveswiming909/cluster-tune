@@ -493,6 +493,10 @@ class HostApplyEngine(private val fs: HostFilesystem) {
                             minPath,
                         (listOf(gpu.observedMin) + gpu.supportedFrequencies).filter { it > 0 && it <= (if (gpuStock) listOfNotNull(stabilizedStockCeiling?.takeIf { it > 0 }, gpu.stockMax.takeIf { it > 0 }, gpu.selectableMax).minOrNull() ?: target else target) }.distinct().sorted().map { it.toString() }
                         )
+                        // Same final mode as CPU floors, and the same mode the
+                        // verification below asserts. Only reachable with root or
+                        // PServer, since the GPU domain is dropped at uid=system.
+                        cpuMaxMutations += HostMutation.Chmod(minPath, minimumProtectionMode(minMode))
                     } else {
                         journalBeforeMutation(gpu.maxPath, originalGpu ?: error("cannot read ${gpu.maxPath}"), originalGpuMode ?: error("cannot read mode for ${gpu.maxPath}"), true, null, if ((originalGpu ?: 0L) > gpu.selectableMax) listOf(gpu.selectableMax) else emptyList())
                     }
@@ -532,7 +536,7 @@ class HostApplyEngine(private val fs: HostFilesystem) {
                         domainId = cpu.id,
                     )
                 }
-                if (cpuNeedsMinRepair[index]) check(fs.mode(cpu.minPath) == writableMode(originalMinModes[index])) { "permission verification failed for ${cpu.id} minimum" }
+                if (cpuNeedsMinRepair[index]) check(fs.mode(cpu.minPath) == minimumProtectionMode(originalMinModes[index])) { "permission verification failed for ${cpu.id} minimum" }
             }
             capabilities.gpu?.let { gpu: GpuDomain ->
                 // A null GPU value is an explicit "leave untouched" request, including when
@@ -556,7 +560,7 @@ class HostApplyEngine(private val fs: HostFilesystem) {
                                 domainId = gpu.id,
                             )
                         }
-                        if (gpuNeedsMinRepair) check(fs.mode(it) == writableMode(originalGpuMinMode ?: error("cannot read mode for $it"))) { "permission verification failed for ${gpu.id} minimum" }
+                        if (gpuNeedsMinRepair) check(fs.mode(it) == minimumProtectionMode(originalGpuMinMode ?: error("cannot read mode for $it"))) { "permission verification failed for ${gpu.id} minimum" }
                     }
                 }
             }
@@ -640,7 +644,13 @@ class HostApplyEngine(private val fs: HostFilesystem) {
         originalMode: Int,
         domainId: String,
     ) {
-        val writable = writableMode(originalMode)
+        // Must match the mode the batch leaves behind, including other-read.
+        // These are asserted against each other, so a floor repaired here and a
+        // floor repaired in the mutation batch have to agree exactly — v25
+        // changed one and not the other, which is what produced
+        // "permission verification failed for policy3 minimum" on any preset
+        // whose ceiling forced a floor repair.
+        val writable = minimumProtectionMode(originalMode)
         var writeAccepted = false
         repeat(5) {
             val current = fs.read(path)?.toLongOrNull()

@@ -1903,6 +1903,19 @@ private fun ProfileChoiceRow(
     val focusScale by animateFloatAsState(if (focused) 1.02f else 1f, label = "profileRowScale")
     val titleColor = if (selected || focused) colorScheme.primary else colorScheme.onSurface
 
+    // Modifier order copied from the quick-tuner card, which works.
+    //
+    // v24 added `onFocusChanged` and focus colours here, but that only *observes*
+    // focus — it never creates a focus target, and neither does `focusRequester`
+    // on its own. The row was relying on `clickable` for focusability, which is
+    // the one thing the working card does NOT rely on. So `requestFocus()` on the
+    // first row had nothing to attach to and the D-pad never entered the list:
+    // the picker and the left-edge picker both looked dead to a controller while
+    // quick tuner felt fine.
+    //
+    // `focusable(interactionSource)` last, after the requester and the observer,
+    // is what actually makes the row a focus target.
+    val focusInteractionSource = remember { MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1910,6 +1923,17 @@ private fun ProfileChoiceRow(
             .scale(focusScale)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.ButtonA -> {
+                        onClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .focusable(interactionSource = focusInteractionSource)
             .background(containerBrush, rowShape)
             .border(BorderStroke(borderWidth, borderColor), rowShape)
             .clip(rowShape)
