@@ -144,6 +144,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.animation.core.animateFloatAsState
 
 private const val NEW_PROFILE_DIALOG_ID = "__new_profile__"
 private enum class MainTab {
@@ -1887,20 +1888,30 @@ private fun ProfileChoiceRow(
     } else {
         Brush.horizontalGradient(listOf(containerColor, containerColor))
     }
-    val borderColor = if (selected) {
-        colorScheme.primary.copy(alpha = 0.82f)
-    } else {
-        colorScheme.outlineVariant.copy(alpha = 0.28f)
+    // Controller focus. `clickable` alone makes the row focusable but draws
+    // nothing, so on a controller the focus moved invisibly — the border only
+    // ever reflected *selection*. Quick tuner mode felt responsive because its
+    // cards carry their own focus treatment; the profile picker and the
+    // left-edge picker, which both render these rows, did not.
+    var focused by remember { mutableStateOf(false) }
+    val borderColor = when {
+        focused -> colorScheme.primary
+        selected -> colorScheme.primary.copy(alpha = 0.82f)
+        else -> colorScheme.outlineVariant.copy(alpha = 0.28f)
     }
-    val titleColor = if (selected) borderColor else colorScheme.onSurface
+    val borderWidth = if (focused) 2.dp else 1.dp
+    val focusScale by animateFloatAsState(if (focused) 1.02f else 1f, label = "profileRowScale")
+    val titleColor = if (selected || focused) colorScheme.primary else colorScheme.onSurface
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
+            .scale(focusScale)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onFocusChanged { focused = it.isFocused }
             .background(containerBrush, rowShape)
-            .border(BorderStroke(1.dp, borderColor), rowShape)
+            .border(BorderStroke(borderWidth, borderColor), rowShape)
             .clip(rowShape)
             .clickable(onClick = onClick)
             .padding(

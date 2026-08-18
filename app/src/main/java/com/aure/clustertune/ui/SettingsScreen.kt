@@ -94,6 +94,14 @@ import com.aure.clustertune.ui.designsystem.token.ClusterTuneBreakpoints
 import com.aure.clustertune.ui.designsystem.token.ClusterTuneDensity
 import com.aure.clustertune.ui.settings.ThemeModeSelector
 import com.aure.clustertune.ui.settings.DeviceExecutionMethodCard
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 
 @Composable
 fun SettingsScreen(
@@ -717,8 +725,50 @@ private fun EdgeHandleSlider(
     var lastEmittedValue by remember(value) { mutableIntStateOf(value) }
     val roundedValue = pendingValue.roundToInt()
 
+    // Same hover-then-edit contract as every other slider in the app: D-pad
+    // moves between controls, A/Center enters adjust mode, left/right step the
+    // value only while adjusting, A again (or moving away) commits. Without
+    // this these four controls were reachable but not operable on a controller.
+    val interactionSource = remember { MutableInteractionSource() }
+    var focused by remember { mutableStateOf(false) }
+    var adjusting by remember { mutableStateOf(false) }
+
+    fun stepBy(delta: Int) {
+        val next = (roundedValue + delta).coerceIn(valueRange.first, valueRange.last)
+        if (next == roundedValue) return
+        pendingValue = next.toFloat()
+        lastEmittedValue = next
+        onValuePreview(next)
+        onValueChangeFinished(next)
+    }
+
+    val outline = when {
+        adjusting -> MaterialTheme.colorScheme.primary
+        focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+        else -> Color.Transparent
+    }
+
     Column(
-        modifier = modifier,
+        modifier = modifier
+            .border(BorderStroke(if (focused || adjusting) 2.dp else 0.dp, outline), RoundedCornerShape(10.dp))
+            .padding(4.dp)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) adjusting = false
+            }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Spacebar, Key.ButtonA -> {
+                        adjusting = !adjusting
+                        true
+                    }
+                    Key.DirectionLeft -> if (adjusting) { stepBy(-1); true } else false
+                    Key.DirectionRight -> if (adjusting) { stepBy(1); true } else false
+                    else -> false
+                }
+            }
+            .focusable(interactionSource = interactionSource),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

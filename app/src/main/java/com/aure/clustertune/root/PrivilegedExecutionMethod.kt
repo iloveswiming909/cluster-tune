@@ -76,7 +76,20 @@ class PrivilegedExecutionResolver(
         cachedMethod = null
         val byId = methods.associateBy { it.id }
         for (method in autoDetectionOrder.mapNotNull(byId::get)) {
-            if (method.probe().isAvailable) return method.also { cachedMethod = it }
+            // Timed because detection sits on the cold path for both app start
+            // and the quick tile: nothing can be applied until it returns. Which
+            // probe is slow is not obvious - `su` and the PServer binder call are
+            // both plausible - so measure rather than guess.
+            val startedAt = System.currentTimeMillis()
+            val probe = method.probe()
+            val elapsed = System.currentTimeMillis() - startedAt
+            if (elapsed >= SLOW_PROBE_LOG_THRESHOLD_MS) {
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                    "probe(${method.id}): ${elapsed}ms available=${probe.isAvailable}" +
+                        (probe.failureReason?.let { " reason=$it" } ?: ""),
+                )
+            }
+            if (probe.isAvailable) return method.also { cachedMethod = it }
         }
         return null
     }
@@ -92,6 +105,9 @@ class PrivilegedExecutionResolver(
     }
 
     companion object {
+        /** Probes slower than this are logged; detection blocks on them. */
+        private const val SLOW_PROBE_LOG_THRESHOLD_MS = 250L
+
         // jdwp-inject is tried last: it is the no-root fallback, and unlike the
         // other two it needs a wireless-debugging connection to start the host.
         val DEFAULT_AUTO_DETECTION_ORDER = listOf("pserver-stdout", "root-shell", "jdwp-inject")

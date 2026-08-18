@@ -299,10 +299,27 @@ class JdwpHostExecutionMethod(
          * cannot call an orphaned host directly, because the binder handle died
          * with the process that owned it.
          */
+        @Volatile
+        private var lastAdoptionRequestAt = 0L
+
+        /**
+         * Rate limit. MainActivity, the overlay service, the tile service and the
+         * boot receiver each build their own AppContainer, and availability is
+         * re-checked often, so an unguarded request wrote this file — and a log
+         * line — dozens of times a minute for no benefit. The host only needs to
+         * see it once to re-announce.
+         */
+        private const val ADOPTION_REQUEST_INTERVAL_MS = 15_000L
+
         fun requestAdoption(dir: File = defaultHostDir()): Boolean = runCatching {
+            val now = System.currentTimeMillis()
+            synchronized(this) {
+                if (now - lastAdoptionRequestAt < ADOPTION_REQUEST_INTERVAL_MS) return false
+                lastAdoptionRequestAt = now
+            }
             if (!dir.exists() && !dir.mkdirs()) return false
             File(dir, ADOPT_REQUEST_FILE).apply {
-                writeText(System.currentTimeMillis().toString())
+                writeText(now.toString())
                 setReadable(true, false)
                 setWritable(true, false)
             }
