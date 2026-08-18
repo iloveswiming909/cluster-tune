@@ -132,6 +132,18 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 
 private const val NEW_PROFILE_DIALOG_ID = "__new_profile__"
 private enum class MainTab {
@@ -435,6 +447,7 @@ fun MainTunerScreen(
 enum class CompactOverlayMode { PROFILES, TUNER }
 
 /** Compact app-aware overlay shared by the edge picker and quick tuner. */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CompactOverlayScreen(
     state: TunerState,
@@ -526,11 +539,53 @@ fun CompactOverlayScreen(
         ?: listOfNotNull(assignment?.profileId, state.activeDisplayProfileId, state.lastAppliedDisplayProfileId)
             .firstOrNull { id -> profiles.any { it.id == id } }
 
+    // Back / B must close this overlay, not fall through to the activity (which
+    // exited the whole app). ButtonB is handled explicitly below for controllers
+    // that report it separately from KEYCODE_BACK.
+    //
+    // The guard matters: this same composable is also hosted in the service's
+    // TYPE_APPLICATION_OVERLAY window, where OverlayComposeViewFactory installs
+    // only the lifecycle / view-model / saved-state owners. BackHandler does a
+    // checkNotNull on the dispatcher owner, so calling it unconditionally would
+    // throw there. That window already routes Back through
+    // OverlayWindowController's key listener and predictive-back callback.
+    if (LocalOnBackPressedDispatcherOwner.current != null) {
+        BackHandler(enabled = true) { onDismissRequest() }
+    }
+
+    // Initial controller focus: the first profile row in list mode, the first
+    // cluster card in tuner mode. Without this the overlay opens with focus still
+    // on whatever was behind it, so D-pad presses move the background instead.
+    val firstRowFocus = remember { FocusRequester() }
+    val firstCardFocus = remember { FocusRequester() }
+    LaunchedEffect(mode) {
+        delay(120)
+        runCatching {
+            if (mode == CompactOverlayMode.PROFILES) firstRowFocus.requestFocus() else firstCardFocus.requestFocus()
+        }
+    }
+
     ScreenContainer(compactMode = true, showCompactScrim = false, compactFillHeight = false) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.92f),
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.92f)
+                // Contain controller focus inside this overlay. This screen is
+                // the app-profile picker; without containment D-pad left/right
+                // escaped to the app list / nav rail behind it and could not get
+                // back. Cancelling the group's exit blocks focus *movement* out
+                // without consuming any key, so children still receive left/right.
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonB) {
+                        onDismissRequest()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .focusProperties { exit = { FocusRequester.Cancel } }
+                .focusRestorer()
+                .focusGroup(),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().background(colorScheme.surfaceContainer)
@@ -629,9 +684,10 @@ fun CompactOverlayScreen(
                             selected = true,
                             applying = false,
                             onClick = { onModeChange(CompactOverlayMode.TUNER) },
+                            focusRequester = firstRowFocus,
                         )
                     }
-                    profiles.forEach { profile ->
+                    profiles.forEachIndexed { index, profile ->
                         ProfileChoiceRow(
                             title = profile.name,
                             selected = selectedProfileId == profile.id,
@@ -643,6 +699,10 @@ fun CompactOverlayScreen(
                                 customDraft = false
                                 onApplyProfile(profile, appProfileEnabled)
                             },
+                            // Give the first row initial focus so the overlay opens
+                            // with the controller already inside it, instead of the
+                            // user having to press left to get in.
+                            focusRequester = if (!customDraft && index == 0) firstRowFocus else null,
                         )
                     }
                     if (profiles.isEmpty()) ProfilePickerEmptyOptionCard()
@@ -690,6 +750,7 @@ fun CompactOverlayScreen(
                         },
                         onGpuValueChange = { stagedGpuValue = it },
                         compactMode = true,
+                        firstCardFocusRequester = firstCardFocus,
                     )
                 }
             }
@@ -1610,6 +1671,7 @@ private fun SectionBubble(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun CenteredModalSurface(
     maxWidth: Dp,
@@ -1647,7 +1709,158 @@ private fun CenteredModalSurface(
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)),
         ) {
-            content()
+            // Controller support for modals. This surface is an inline overlay
+            // rather than a real Dialog window, so focus is not captured for us:
+            //  - focusGroup bounds the 2-D focus search to the modal's contents so
+            //    D-pad up/down/left/right resolves inside it (rows AND buttons).
+            //  - focusRestorer remembers the last-focused child and restores it
+            //    when focus re-enters, so a touch doesn't leave the controller
+            //    with no target to resume from.
+            //  - BackHandler + ButtonB make a single Back/B press close the modal
+            //    rather than only dropping an inner highlight state.
+            if (LocalOnBackPressedDispatcherOwner.current != null) {
+                BackHandler(enabled = true) { onDismiss() }
+            }
+            Box(
+                modifier = Modifier
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonB) {
+                            onDismiss()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    // Trap focus inside the modal. focusGroup alone only *bounds*
+                    // the 2-D search — focus could still escape sideways to the
+                    // nav rail / profile list behind the overlay, and once out
+                    // there was no way back in. Cancelling the group's exit keeps
+                    // focus contained without consuming any key: left/right are
+                    // still delivered to children (needed for slider adjust), they
+                    // just can't move focus out of the modal.
+                    .focusProperties { exit = { FocusRequester.Cancel } }
+                    .focusRestorer()
+                    .focusGroup(),
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+/**
+ * Profile-name field with a controller-friendly "hover" state. When navigating by
+ * D-pad the field is a plain focusable row (no keyboard), so you can pass over it
+ * and move back down to the cluster cards. Pressing A/Center (or tapping) enters
+ * edit mode: the real text field takes focus and the keyboard opens. Back/Enter
+ * or focus loss commits and returns to hover. A directly-focusable text field
+ * would force the keyboard open every time focus landed on it.
+ */
+@Composable
+private fun ProfileNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(20.dp)
+    var editing by remember { mutableStateOf(false) }
+    var hoverFocused by remember { mutableStateOf(false) }
+    val editFocus = remember { FocusRequester() }
+
+    if (editing) {
+        var everFocused by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { runCatching { editFocus.requestFocus() } }
+        // While editing, Back/B must only leave edit mode (dismissing the
+        // keyboard), NOT close the surrounding dialog. This nested BackHandler is
+        // registered deeper than the modal's, so it wins while it is enabled.
+        if (LocalOnBackPressedDispatcherOwner.current != null) {
+            BackHandler(enabled = true) { editing = false }
+        }
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 62.dp)
+                .focusRequester(editFocus)
+                .onFocusChanged {
+                    if (it.isFocused) {
+                        everFocused = true
+                    } else if (everFocused) {
+                        // Only leave edit mode once focus was actually acquired and
+                        // then lost, not during the frame before requestFocus().
+                        editing = false
+                    }
+                }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        (event.key == Key.Back || event.key == Key.ButtonB ||
+                            event.key == Key.Enter || event.key == Key.NumPadEnter)
+                    ) {
+                        editing = false
+                        true
+                    } else {
+                        false
+                    }
+                },
+            singleLine = true,
+            label = { Text("Profile name") },
+            shape = shape,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
+                unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
+                focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
+                cursorColor = colorScheme.primary,
+            ),
+        )
+    } else {
+        val borderColor = if (hoverFocused) {
+            colorScheme.primary.copy(alpha = 0.82f)
+        } else {
+            colorScheme.outlineVariant.copy(alpha = 0.28f)
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 62.dp)
+                .onFocusChanged { hoverFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        (event.key == Key.DirectionCenter || event.key == Key.Enter ||
+                            event.key == Key.NumPadEnter || event.key == Key.Spacebar ||
+                            event.key == Key.ButtonA)
+                    ) {
+                        editing = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .focusable()
+                .clickable { editing = true }
+                .background(colorScheme.surfaceContainerHigh.copy(alpha = 0.46f), shape)
+                .border(BorderStroke(if (hoverFocused) 2.dp else 1.dp, borderColor), shape)
+                .clip(shape)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "Profile name",
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.84f),
+            )
+            Text(
+                text = value.ifEmpty { "Tap or press to edit" },
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (value.isEmpty()) {
+                    colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                } else {
+                    colorScheme.onSurface
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -1659,6 +1872,7 @@ private fun ProfileChoiceRow(
     applying: Boolean = false,
     onClick: () -> Unit,
     compact: Boolean = false,
+    focusRequester: FocusRequester? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val rowShape = RoundedCornerShape(20.dp)
@@ -1684,6 +1898,7 @@ private fun ProfileChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (compact) 38.dp else 48.dp)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .background(containerBrush, rowShape)
             .border(BorderStroke(1.dp, borderColor), rowShape)
             .clip(rowShape)
@@ -2391,13 +2606,15 @@ private fun PolicyEditorSection(
     onPolicyValueChange: (CpuPolicyInfo, Int) -> Unit,
     onGpuValueChange: (Int) -> Unit = {},
     compactMode: Boolean,
+    /** Initial controller-focus target: attached to the first cluster card. */
+    firstCardFocusRequester: FocusRequester? = null,
 ) {
     if (state.policies.isEmpty()) {
         EmptyState(state)
         return
     }
 
-    state.policies.forEach { policy ->
+    state.policies.forEachIndexed { index, policy ->
         TunerPolicyCard(
             policy = policy,
             selectedValue = state.currentValues[policy.id] ?: policy.currentMaxFreq,
@@ -2405,6 +2622,7 @@ private fun PolicyEditorSection(
             onValueChanged = { onPolicyValueChange(policy, it) },
             compactMode = compactMode,
             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
+            focusRequester = if (index == 0) firstCardFocusRequester else null,
         )
     }
     state.gpuPolicy?.let { gpuPolicy ->
@@ -2450,6 +2668,14 @@ private fun ProfileEditorDialog(
     val colorScheme = MaterialTheme.colorScheme
 
     CenteredModalSurface(maxWidth = 900.dp, onDismiss = onDismiss) {
+        // Initial controller focus lands on the first cluster card, not the name
+        // field: focusing a text field auto-opens the soft keyboard, which is
+        // disruptive on a handheld. The name field is reachable by pressing up.
+        val firstCardFocus = remember { FocusRequester() }
+        LaunchedEffect(manualMode) {
+            delay(80)
+            runCatching { firstCardFocus.requestFocus() }
+        }
         Column(modifier = Modifier.fillMaxHeight()) {
             Column(
                 modifier = Modifier
@@ -2460,26 +2686,13 @@ private fun ProfileEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (!manualMode) {
-                    OutlinedTextField(
+                    ProfileNameField(
                         value = profileName,
                         onValueChange = { profileName = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 62.dp),
-                        singleLine = true,
-                        label = { Text("Profile name") },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = colorScheme.primary.copy(alpha = 0.72f),
-                            unfocusedBorderColor = colorScheme.outlineVariant.copy(alpha = 0.28f),
-                            focusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                            unfocusedContainerColor = colorScheme.surfaceContainerHigh.copy(alpha = 0.46f),
-                            cursorColor = colorScheme.primary,
-                        ),
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    baseState.policies.forEach { policy ->
+                    baseState.policies.forEachIndexed { index, policy ->
                         TunerPolicyCard(
                             policy = policy,
                             selectedValue = editedValues[policy.id] ?: policy.currentMaxFreq,
@@ -2489,6 +2702,7 @@ private fun ProfileEditorDialog(
                             },
                             compactMode = true,
                             displayFrequenciesAsPercent = displayFrequenciesAsPercent,
+                            focusRequester = if (index == 0) firstCardFocus else null,
                         )
                     }
                     baseState.gpuPolicy?.let { gpuPolicy ->
@@ -2498,6 +2712,7 @@ private fun ProfileEditorDialog(
                             actualValue = baseState.actualGpuMaxFrequencyHz ?: gpuPolicy.currentMaxFrequencyHz,
                             onValueChanged = { editedGpuValue = it },
                             compactMode = true,
+                            focusRequester = if (baseState.policies.isEmpty()) firstCardFocus else null,
                         )
                     }
                 }

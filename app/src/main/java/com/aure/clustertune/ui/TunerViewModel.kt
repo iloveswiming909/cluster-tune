@@ -518,18 +518,46 @@ class TunerViewModel(
         return appliedProfile?.name ?: "Custom values"
     }
 
+    /**
+     * Names only the clusters that actually failed.
+     *
+     * This used to describe every policy, so a single mismatched cluster produced
+     * a message listing all of them — which then got truncated by the toast, and
+     * user-submitted reports pointed at the wrong cluster. It also has to use the
+     * SAME rule the verification loop uses ([ProfileStateResolver.isPolicyValueSatisfied]):
+     * on a Stock reset the kernel legitimately lands on the top selectable bin
+     * rather than the observed ceiling (e.g. 2707200 for a 2803200 request) and
+     * the loop accepts that, so strict equality here reported false failures.
+     */
     private fun buildVerificationFailureMessage(
         state: TunerState,
         actualValues: Map<Int, Int>,
         commandOutput: String?,
     ): String {
-        val summary = state.policies.joinToString(", ") { policy ->
+        val asPercent = settings.value.displayFrequenciesAsPercent
+        val problems = state.policies.mapNotNull { policy ->
             val requested = state.currentValues[policy.id] ?: policy.currentMaxFreq
-            val actual = actualValues[policy.id] ?: policy.currentMaxFreq
-            "C${policy.id} requested ${formatFrequency(requested, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}, " +
-                "actual ${formatFrequency(actual, boosted = actual > policy.selectableMaxFreq, policy = policy, displayAsPercent = settings.value.displayFrequenciesAsPercent)}"
+            val actual = actualValues[policy.id]
+            when {
+                actual == null -> "C${policy.id}: could not read back " +
+                    "(wanted ${formatFrequency(requested, policy = policy, displayAsPercent = asPercent)})"
+                ProfileStateResolver.isPolicyValueSatisfied(policy, requested, actual) -> null
+                else -> "C${policy.id}: wanted " +
+                    formatFrequency(requested, policy = policy, displayAsPercent = asPercent) +
+                    " but is " +
+                    formatFrequency(
+                        actual,
+                        boosted = actual > policy.selectableMaxFreq,
+                        policy = policy,
+                        displayAsPercent = asPercent,
+                    )
+            }
         }
-        val base = "Apply did not stick: $summary"
+        val base = if (problems.isEmpty()) {
+            "Apply did not stick (no cluster mismatch reported)"
+        } else {
+            "Couldn't apply " + problems.joinToString("; ")
+        }
         return commandOutput?.takeIf { it.isNotBlank() }?.let { "$base | log: ${it.take(120)}" } ?: base
     }
 

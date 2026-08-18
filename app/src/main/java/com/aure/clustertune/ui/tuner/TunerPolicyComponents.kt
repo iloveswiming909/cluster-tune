@@ -48,6 +48,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -63,6 +65,7 @@ internal fun TunerPolicyCard(
     compactMode: Boolean = false,
     displayFrequenciesAsPercent: Boolean = false,
     actualValue: Int = selectedValue,
+    focusRequester: FocusRequester? = null,
 ) {
     val supported = policy.supportedFrequencies.filter { it <= policy.selectableMaxFreq }.ifEmpty { listOf(policy.selectableMaxFreq) }
     val displaySelectedValue = policy.clampToWritableMax(selectedValue)
@@ -86,6 +89,7 @@ internal fun TunerPolicyCard(
         maxIndex = supported.lastIndex,
         onIndexChange = { index -> onValueChanged(supported[index]) },
         compactMode = compactMode,
+        focusRequester = focusRequester,
     )
 }
 
@@ -98,6 +102,7 @@ private fun TunerFrequencyCard(
     maxIndex: Int,
     onIndexChange: (Int) -> Unit,
     compactMode: Boolean,
+    focusRequester: FocusRequester? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val stock = valueIndex >= maxIndex
@@ -134,6 +139,7 @@ private fun TunerFrequencyCard(
         modifier = Modifier
             .scale(scale)
             .border(BorderStroke(borderWidth, borderColor), RoundedCornerShape(20.dp))
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged {
                 focused = it.isFocused
                 if (!it.isFocused) adjusting = false
@@ -322,6 +328,7 @@ internal fun TunerGpuPolicyCard(
     actualValue: Int = selectedValue,
     onValueChanged: (Int) -> Unit,
     compactMode: Boolean = false,
+    focusRequester: FocusRequester? = null,
 ) {
     val supported = policy.supportedFrequenciesHz.filter { it <= policy.selectableMaxFrequencyHz }
         .ifEmpty { listOf(policy.selectableMaxFrequencyHz) }.distinct().sorted()
@@ -338,6 +345,7 @@ internal fun TunerGpuPolicyCard(
             onValueChanged(supported[index.coerceIn(0, supported.lastIndex)])
         },
         compactMode = compactMode,
+        focusRequester = focusRequester,
     )
 }
 
