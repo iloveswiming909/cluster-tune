@@ -176,21 +176,38 @@ class JdwpHostExecutionMethod(
         }
     }
 
-    /** Surfaces the host's own startup output, which is otherwise invisible. */
+    /**
+     * Surfaces the host's own startup output, which is otherwise invisible.
+     *
+     * Waits for the log to stop growing rather than dumping the first thing that
+     * appears. The earlier version returned as soon as any content existed, so
+     * it reliably captured only "entered args" and "looper prepared" and cut off
+     * before the lines that actually matter — capability decisions such as
+     * "omitting GPU domain", and the binder handoff.
+     */
     private fun reportStartupLog() {
         val log = File(hostDir, STARTUP_LOG)
         val deadline = System.currentTimeMillis() + STARTUP_LOG_WAIT_MS
+        var text = ""
+        var stableFor = 0L
         while (System.currentTimeMillis() < deadline) {
-            val text = runCatching { log.readText() }.getOrNull().orEmpty()
-            if (text.isNotBlank()) {
-                text.lineSequence().filter { it.isNotBlank() }.take(STARTUP_LOG_LINES).forEach {
-                    JdwpDebugLog.d("host| ${it.take(220)}")
-                }
-                return
+            val current = runCatching { log.readText() }.getOrNull().orEmpty()
+            if (current == text && text.isNotBlank()) {
+                stableFor += STARTUP_LOG_POLL_MS
+                if (stableFor >= STARTUP_LOG_SETTLE_MS) break
+            } else {
+                stableFor = 0
+                text = current
             }
             Thread.sleep(STARTUP_LOG_POLL_MS)
         }
-        JdwpDebugLog.d("host| (no startup output within ${STARTUP_LOG_WAIT_MS}ms)")
+        if (text.isBlank()) {
+            JdwpDebugLog.d("host| (no startup output within ${STARTUP_LOG_WAIT_MS}ms)")
+            return
+        }
+        text.lineSequence().filter { it.isNotBlank() }.take(STARTUP_LOG_LINES).forEach {
+            JdwpDebugLog.d("host| ${it.take(220)}")
+        }
     }
 
     // ---- injection ----------------------------------------------------------
@@ -259,9 +276,11 @@ class JdwpHostExecutionMethod(
         private const val HOST_DIR_NAME = "host"
         private const val LAUNCHER_NAME = "ct-launch-host.sh"
         private const val STARTUP_LOG = "host-startup.log"
-        private const val STARTUP_LOG_WAIT_MS = 2500L
+        private const val STARTUP_LOG_WAIT_MS = 5000L
         private const val STARTUP_LOG_POLL_MS = 100L
-        private const val STARTUP_LOG_LINES = 20
+        /** How long the log must stop growing before it is considered complete. */
+        private const val STARTUP_LOG_SETTLE_MS = 600L
+        private const val STARTUP_LOG_LINES = 40
 
         private val CLASSPATH_PATTERN = Regex("""CLASSPATH='(?:[^']|'\\'')*'""")
 

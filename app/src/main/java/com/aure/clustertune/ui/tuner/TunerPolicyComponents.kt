@@ -38,6 +38,22 @@ import kotlin.math.roundToInt
 import com.aure.clustertune.model.CpuPolicyInfo
 import com.aure.clustertune.model.GpuPolicyInfo
 import com.aure.clustertune.ui.designsystem.component.CtRowSurface
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 
 @Composable
 internal fun TunerPolicyCard(
@@ -86,7 +102,55 @@ private fun TunerFrequencyCard(
     val colorScheme = MaterialTheme.colorScheme
     val stock = valueIndex >= maxIndex
     val sliderColor = if (stock) colorScheme.onSurfaceVariant.copy(alpha = 0.58f) else colorScheme.primary
+
+    // Controller support. The card is the focus target — the slider inside is
+    // touch-only by construction — so D-pad up/down moves between clusters.
+    // A/Center enters "adjust mode", where left/right step the value; pressing
+    // again, or moving focus away, leaves it. Left/right are consumed ONLY while
+    // adjusting, so otherwise they still traverse focus normally, and Back/B is
+    // never consumed so one press still closes the surrounding dialog.
+    //
+    // This lives in the shared frequency card rather than in TunerPolicyCard, so
+    // the GPU row gets the same behaviour without a second copy of the logic.
+    val interactionSource = remember { MutableInteractionSource() }
+    var focused by remember { mutableStateOf(false) }
+    var adjusting by remember { mutableStateOf(false) }
+
+    fun step(delta: Int) {
+        if (maxIndex <= 0) return
+        val next = (valueIndex + delta).coerceIn(0, maxIndex)
+        if (next != valueIndex) onIndexChange(next)
+    }
+
+    val borderColor = when {
+        adjusting -> colorScheme.primary
+        focused -> colorScheme.primary.copy(alpha = 0.82f)
+        else -> colorScheme.outlineVariant.copy(alpha = 0.28f)
+    }
+    val borderWidth = if (focused || adjusting) 2.dp else 1.dp
+    val scale by animateFloatAsState(if (focused) 1.02f else 1f, label = "policyCardScale")
+
     CtRowSurface(
+        modifier = Modifier
+            .scale(scale)
+            .border(BorderStroke(borderWidth, borderColor), RoundedCornerShape(20.dp))
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) adjusting = false
+            }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Spacebar, Key.ButtonA -> {
+                        adjusting = !adjusting
+                        true
+                    }
+                    Key.DirectionLeft -> if (adjusting) { step(-1); true } else false
+                    Key.DirectionRight -> if (adjusting) { step(1); true } else false
+                    else -> false
+                }
+            }
+            .focusable(interactionSource = interactionSource),
         minimumHeight = 62.dp,
         shape = RoundedCornerShape(20.dp),
         contentPadding = PaddingValues(0.dp),
