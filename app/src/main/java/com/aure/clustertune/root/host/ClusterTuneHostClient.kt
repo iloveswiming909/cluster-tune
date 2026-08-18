@@ -86,6 +86,35 @@ class ClusterTuneHostClient(
     @Volatile private var attachedMethod: String? = null
     private var death: IBinder.DeathRecipient? = null
 
+    /**
+     * Begin listening for a host that is already running from a previous app
+     * process, so it can be adopted instead of relaunched.
+     *
+     * Safe and cheap to call on every app start. Without it, killing the app
+     * stranded a perfectly healthy host: the handoff broadcast had already been
+     * delivered to a process that no longer exists, and nothing else advertises
+     * the host — it is never registered with ServiceManager.
+     */
+    fun listenForAdoption() {
+        HostRendezvous.listen(context, serviceName, generation)
+    }
+
+    /**
+     * Waits briefly for an adoptable host to re-announce itself.
+     *
+     * An adoptable host repeats its handoff every couple of seconds while
+     * nothing is attached, so a short wait here turns "app restarted while the
+     * host is alive" from a race into a deterministic reattach.
+     */
+    private fun awaitAdoption(timeoutMs: Long): IBinder? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            HostRendezvous.lookup(serviceName)?.let { return it }
+            Thread.sleep(ADOPTION_POLL_MS)
+        }
+        return HostRendezvous.lookup(serviceName)
+    }
+
     fun ensureStarted(timeoutMs: Long = 3000): Result<Unit> = synchronized(lock) {
         runCatching {
             val configuredMethod = resolver.configuredMethodIdSnapshot
@@ -114,6 +143,23 @@ class ClusterTuneHostClient(
                 }
             }
             val selection = resolver.selectionSnapshot()
+            if (selection.methodId == null) {
+                // Nothing can start a host right now — but one may already be
+                // running from a previous app process and simply not have
+                // re-announced itself yet. Waiting here is the difference
+                // between "profiles work offline after a restart" and "you must
+                // turn wireless debugging back on".
+                HostRendezvous.listen(context, serviceName, generation)
+                com.aure.clustertune.jdwp.JdwpHostExecutionMethod.requestAdoption()
+                awaitAdoption(ADOPTION_WAIT_MS)?.let { adopted ->
+                    val pingAttempt = runCatching { ping(adopted, null) }
+                    if (pingAttempt.isSuccess) {
+                        sendLease(adopted)
+                        attach(adopted, pingAttempt.getOrThrow().method, requireLegacyService = false)
+                        return@runCatching
+                    }
+                }
+            }
             val method = selection.methodId ?: error("no privileged execution method")
             val dex = HostDexRuntime(context).extract(generation)
             // Keep the classpath as a raw colon-delimited value. The launcher quotes the
@@ -404,7 +450,12 @@ class ClusterTuneHostClient(
     private fun readRequiredString(parcel: Parcel, label: String): String =
         parcel.readString()?.also { require(it.length <= 512) { "$label is too long" } }
             ?: error("missing $label")
-    companion object { private val START_LOCKS=ConcurrentHashMap<Int,Any>() }
+    companion object {
+        private val START_LOCKS = ConcurrentHashMap<Int, Any>()
+        private const val ADOPTION_POLL_MS = 100L
+        /** Covers two of the host's 1.5s adopt-request polls, plus slack. */
+        private const val ADOPTION_WAIT_MS = 4000L
+    }
 }
 
 /** Host protocol uses -1 as the wire sentinel for an unavailable optional node. */

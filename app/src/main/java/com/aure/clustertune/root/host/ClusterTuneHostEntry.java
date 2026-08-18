@@ -60,21 +60,78 @@ public final class ClusterTuneHostEntry {
         context.sendBroadcastAsUser(handoff, UserHandle.getUserHandleForUid(owner));
         log("broadcast handoff returned");
 
+        // Whether a replacement host is cheap to start. With root or PServer it
+        // is, so dying with the app is correct and keeps things tidy. On the
+        // no-root path it is not: starting a host needs an active wireless
+        // debugging connection, which the user has usually turned off by then.
+        // Exiting there stranded the app with no way back until it re-paired,
+        // even though the caps were applied and this process was healthy.
+        host.adoptable = "jdwp-inject".equals(args[3]);
+        // Relative to the working directory the launcher cd'd into, which for the
+        // jdwp path is the app-writable handoff directory on shared storage.
+        final File adoptRequest = new File(ADOPT_REQUEST_FILE);
+        if (host.adoptable) {
+            log("adopt request path=" + adoptRequest.getAbsolutePath());
+        }
+
         synchronized (host) {
-            log("wait entered");
+            log("wait entered adoptable=" + host.adoptable);
             long leaseDeadline = System.currentTimeMillis() + 5000L;
             while (!host.stopping) {
-                if (host.lease == null && System.currentTimeMillis() >= leaseDeadline) {
-                    host.stopping = true;
-                    break;
+                if (host.lease != null) {
+                    // Attached. Block until something happens — no timers, no
+                    // polling, no wakeups. This is the normal state.
+                    host.wait(0L);
+                    continue;
                 }
-                long remaining = leaseDeadline - System.currentTimeMillis();
-                if (host.lease == null && remaining <= 0L) continue;
-                host.wait(host.lease == null ? remaining : 0L);
+                long now = System.currentTimeMillis();
+                if (!host.adoptable) {
+                    // Root / PServer: a replacement host is free to start, so
+                    // exiting with the app is correct and tidy.
+                    if (now >= leaseDeadline) {
+                        host.stopping = true;
+                        break;
+                    }
+                    host.wait(Math.max(leaseDeadline - now, 1L));
+                    continue;
+                }
+                // Unattached on the no-root path. Starting a replacement would
+                // need wireless debugging, which the user has very likely turned
+                // off by now, so this process stays up until the device reboots
+                // and waits to be re-adopted.
+                //
+                // The app asks by creating a file; this only stats it. An earlier
+                // version instead re-broadcast the handoff every two seconds,
+                // which spent IPC forever on the chance that an app might restart.
+                if (adoptRequest.exists()) {
+                    adoptRequest.delete();
+                    try {
+                        context.sendBroadcastAsUser(handoff, UserHandle.getUserHandleForUid(owner));
+                        log("handoff re-announced on request");
+                    } catch (Throwable throwable) {
+                        log("handoff re-announce failed: " + throwable);
+                    }
+                }
+                host.wait(ADOPT_POLL_MS);
             }
         }
         log("wait exited");
     }
+
+    /**
+     * File the app creates to ask an orphaned host to re-announce itself.
+     *
+     * Resolved against the host's working directory. Only consulted while the
+     * host is unattached, so an attached host does no polling whatsoever.
+     */
+    static final String ADOPT_REQUEST_FILE = "adopt-request";
+
+    /**
+     * How often an unattached host checks for an adoption request. Only affects
+     * how long the app waits at startup; a stat on an already-open directory is
+     * far cheaper than the IPC broadcast it replaced.
+     */
+    private static final long ADOPT_POLL_MS = 1500L;
 
     private static void log(String message) {
         String path = System.getenv("CT_HOST_LOG");
@@ -135,6 +192,7 @@ public final class ClusterTuneHostEntry {
         final long epoch = System.nanoTime();
         boolean stopping;
         IBinder lease;
+        boolean adoptable;
         final HostApplyEngine engine;
         HostCapabilities capabilities;
 
@@ -229,7 +287,14 @@ public final class ClusterTuneHostEntry {
                             lease = candidate;
                             candidate.linkToDeath(() -> {
                                 synchronized (this) {
-                                    stopping = true;
+                                    if (adoptable) {
+                                        // The app went away. Stay up and become
+                                        // adoptable again rather than exiting;
+                                        // the wait loop re-announces us.
+                                        lease = null;
+                                    } else {
+                                        stopping = true;
+                                    }
                                     notifyAll();
                                 }
                             }, 0);

@@ -290,6 +290,32 @@ class JdwpHostExecutionMethod(
          * readable/writable by uid=system, which this fork has depended on
          * since the original script handoff.
          */
+        /**
+         * Ask a host left running by a previous app process to re-announce
+         * itself, so this process can adopt it.
+         *
+         * The host stats this file only while it is unattached, and deletes it
+         * when it acts on it. Creating it is the whole handshake — the app
+         * cannot call an orphaned host directly, because the binder handle died
+         * with the process that owned it.
+         */
+        fun requestAdoption(dir: File = defaultHostDir()): Boolean = runCatching {
+            if (!dir.exists() && !dir.mkdirs()) return false
+            File(dir, ADOPT_REQUEST_FILE).apply {
+                writeText(System.currentTimeMillis().toString())
+                setReadable(true, false)
+                setWritable(true, false)
+            }
+            JdwpDebugLog.d("adoption requested via ${File(dir, ADOPT_REQUEST_FILE).absolutePath}")
+            true
+        }.getOrElse {
+            JdwpDebugLog.w("adoption request failed: ${it.message}")
+            false
+        }
+
+        /** Must match ClusterTuneHostEntry.ADOPT_REQUEST_FILE. */
+        private const val ADOPT_REQUEST_FILE = "adopt-request"
+
         @SuppressLint("SdCardPath")
         @Suppress("DEPRECATION")
         fun defaultHostDir(): File = File(

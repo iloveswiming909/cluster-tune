@@ -85,8 +85,21 @@ class AppContainer(context: Context) {
     fun startPrivilegedHost(): Result<Unit> {
         val result = hostClient.ensureStarted()
         result.fold(
-            onSuccess = { Log.i(TAG, "privileged host started via ${hostClient.selectedMethodId}") },
-            onFailure = { Log.w(TAG, "privileged host failed to start", it) },
+            onSuccess = {
+                Log.i(TAG, "privileged host started via ${hostClient.selectedMethodId}")
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.d(
+                    "host: started via ${hostClient.selectedMethodId ?: "unknown"}",
+                )
+            },
+            onFailure = {
+                Log.w(TAG, "privileged host failed to start", it)
+                // Also to the in-app log: this is the copyable one, and a bare
+                // "failed to start" in logcat told us nothing about why.
+                com.wuyr.jdwp_injector.debug.JdwpDebugLog.w(
+                    "host: FAILED to start via ${hostClient.selectedMethodId ?: "no method"} — " +
+                        "${it::class.java.simpleName}: ${it.message ?: "no message"}",
+                )
+            },
         )
         return result
     }
@@ -106,6 +119,18 @@ class AppContainer(context: Context) {
     }
 
     init {
+        // Adopt a host left running by a previous app process. Must happen before
+        // anything asks whether a privileged executor is available, otherwise the
+        // first check races the host's re-announcement and reports "not
+        // available" for a host that is alive and well.
+        runCatching {
+            hostClient.listenForAdoption()
+            // Ask an orphaned host to re-announce. Harmless when none is running:
+            // the file simply sits there until a host consumes it or the next
+            // launch overwrites it.
+            com.aure.clustertune.jdwp.JdwpHostExecutionMethod.requestAdoption()
+        }
+
         appScope.launch {
             settingsStorage.settings.collect { settings ->
                 privilegedExecutionResolver.setConfiguredMethodId(settings.privilegedExecutionMethodId)

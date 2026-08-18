@@ -32,6 +32,17 @@ interface HostFilesystem {
      */
     fun canControl(path: String): Boolean = true
 
+    /**
+     * `mode uid:gid` for [path], or null if it cannot be stat'd.
+     *
+     * Used only to annotate failures. The long-running "C0 applies on some
+     * devices but not others" reports were never diagnosable from the app side,
+     * because the failure message said what went wrong but not what the node
+     * looked like — and the whole hypothesis was that policy0 ships different
+     * permissions or ownership from policy3/7 on affected devices.
+     */
+    fun describe(path: String): String? = null
+
     fun lastMutationError(): String? = null
     fun lastMutationFailure(): Throwable? = null
     fun mutate(operations: List<HostMutation>): Boolean {
@@ -50,6 +61,13 @@ interface HostFilesystem {
         return true
     }
 }
+
+/**
+ * Write attempts before a read-back mismatch is treated as a real failure.
+ * Covers a vendor service rewriting a cpufreq node between our write and our
+ * verification; a genuinely refused write still fails on every attempt.
+ */
+private const val WRITE_ATTEMPTS = 3
 
 sealed interface HostMutation {
     data class Chmod(val path: String, val mode: Int) : HostMutation
@@ -87,6 +105,11 @@ class RealHostFilesystem @JvmOverloads constructor(
         canChmod(path) || Os.access(path, OsConstants.W_OK)
     }.getOrDefault(false)
 
+    override fun describe(path: String): String? = runCatching {
+        val stat = Os.stat(path)
+        "0" + Integer.toOctalString(stat.st_mode and 0x1ff) + " ${stat.st_uid}:${stat.st_gid}"
+    }.getOrNull()
+
     override fun mutate(operations: List<HostMutation>): Boolean {
         mutationError = null
         mutationFailure = null
@@ -118,14 +141,33 @@ class RealHostFilesystem @JvmOverloads constructor(
                             return false
                         }
                         val quotedPath = shellQuote(operation.path)
-                        append("echo ")
-                            .append(shellQuote(operation.value))
+                        val quotedValue = shellQuote(operation.value)
+                        // Retry rather than fail on the first mismatch.
+                        //
+                        // A single write-then-verify treats any disagreement as
+                        // fatal, but a cpufreq node is shared: the vendor's own
+                        // perf and thermal services write these same nodes, and a
+                        // rewrite landing between our write and our read-back is
+                        // indistinguishable from a rejected write. That is a
+                        // plausible cause of "C0 will not apply", since the small
+                        // cluster is the one those services touch most.
+                        //
+                        // A genuinely refused write still fails: it fails every
+                        // attempt and the final check is unchanged.
+                        append("ct_i=0; while :; do echo ")
+                            .append(quotedValue)
                             .append(" > ")
                             .append(quotedPath)
-                            .append(" 2>/dev/null && [ \"\$(cat ")
+                            .append(" 2>/dev/null; [ \"\$(cat ")
                             .append(quotedPath)
                             .append(" 2>/dev/null)\" = ")
-                            .append(shellQuote(operation.value))
+                            .append(quotedValue)
+                            .append(" ] && break; ct_i=\$((ct_i+1)); [ \"\$ct_i\" -ge ")
+                            .append(WRITE_ATTEMPTS.toString())
+                            .append(" ] && break; sleep 0.05; done; [ \"\$(cat ")
+                            .append(quotedPath)
+                            .append(" 2>/dev/null)\" = ")
+                            .append(quotedValue)
                             .append(" ]; ")
                     }
 
@@ -434,7 +476,18 @@ class HostApplyEngine(private val fs: HostFilesystem) {
                 }
             }
             mutationStarted = true
-            check(fs.mutate(cpuMaxMutations)) { "cannot apply CPU maximum mutations: ${fs.lastMutationError() ?: "unknown failure"}" }
+            check(fs.mutate(cpuMaxMutations)) {
+                // Include each node's mode/owner and this process's uid. Without
+                // it a failure report says only that a write was refused, and the
+                // one thing needed to act on it — whether that node differs from
+                // the ones that worked — is missing.
+                val nodes = capabilities.cpus.joinToString("; ") { cpu ->
+                    "${cpu.id} max=${fs.describe(cpu.maxPath) ?: "?"} min=${fs.describe(cpu.minPath) ?: "?"}"
+                }
+                val gpuNode = capabilities.gpu?.let { " gpu=${fs.describe(it.maxPath) ?: "?"}" } ?: ""
+                "cannot apply CPU maximum mutations: ${fs.lastMutationError() ?: "unknown failure"}" +
+                    " [uid=${runCatching { Os.getuid() }.getOrDefault(-1)} $nodes$gpuNode]"
+            }
             capabilities.cpus.forEachIndexed { index, cpu ->
                 val target = expected[index]
                 val finalMode = protectionMode(originalModes[index], cpuStock[index])
