@@ -117,6 +117,17 @@ class RealHostFilesystem @JvmOverloads constructor(
             mutationError = "invalid operation count"
             return false
         }
+        // Per-node isolation.
+        //
+        // Every mutation used to share one `set -e` batch, so the first node that
+        // refused a write aborted everything after it — C3 and C7 were never
+        // written because C0 failed, which is the wrong trade: a policy that can
+        // be applied should be applied. The working 1.0.2-era build wrapped each
+        // policy for exactly this reason.
+        //
+        // Failures are recorded on stderr as `ct-node-failed:<path>` instead of
+        // aborting, and the read-back verification that follows is what decides
+        // overall success — it already names the offending policy.
         val script = buildString {
             append("set -e; ")
             operations.forEach { operation ->
@@ -142,33 +153,38 @@ class RealHostFilesystem @JvmOverloads constructor(
                         }
                         val quotedPath = shellQuote(operation.path)
                         val quotedValue = shellQuote(operation.value)
-                        // Retry rather than fail on the first mismatch.
+                        // Retry, then report — never abort the batch.
                         //
-                        // A single write-then-verify treats any disagreement as
-                        // fatal, but a cpufreq node is shared: the vendor's own
-                        // perf and thermal services write these same nodes, and a
-                        // rewrite landing between our write and our read-back is
-                        // indistinguishable from a rejected write. That is a
-                        // plausible cause of "C0 will not apply", since the small
-                        // cluster is the one those services touch most.
+                        // A cpufreq node is shared: the vendor's own perf and
+                        // thermal services write these same nodes, so a rewrite
+                        // landing between our write and our read-back is
+                        // indistinguishable from a rejected write. Retrying
+                        // absorbs that race; a genuinely refused write still
+                        // fails every attempt and is reported on stderr for the
+                        // read-back verification to act on.
                         //
-                        // A genuinely refused write still fails: it fails every
-                        // attempt and the final check is unchanged.
+                        // Everything here is `if`-based on purpose. Under
+                        // `set -e` a trailing `[ x ] && break` evaluates to 1
+                        // when the test is false, which aborts the entire
+                        // script — so the earlier `&&` form silently turned a
+                        // single failing node into "nothing applied at all".
                         append("ct_i=0; while :; do echo ")
                             .append(quotedValue)
                             .append(" > ")
                             .append(quotedPath)
-                            .append(" 2>/dev/null; [ \"\$(cat ")
+                            .append(" 2>/dev/null || :; if [ \"\$(cat ")
                             .append(quotedPath)
                             .append(" 2>/dev/null)\" = ")
                             .append(quotedValue)
-                            .append(" ] && break; ct_i=\$((ct_i+1)); [ \"\$ct_i\" -ge ")
+                            .append(" ]; then break; fi; ct_i=\$((ct_i+1)); if [ \"\$ct_i\" -ge ")
                             .append(WRITE_ATTEMPTS.toString())
-                            .append(" ] && break; sleep 0.05; done; [ \"\$(cat ")
+                            .append(" ]; then break; fi; sleep 0.05; done; if [ \"\$(cat ")
                             .append(quotedPath)
-                            .append(" 2>/dev/null)\" = ")
+                            .append(" 2>/dev/null)\" != ")
                             .append(quotedValue)
-                            .append(" ]; ")
+                            .append(" ]; then printf '%s\\n' ")
+                            .append(shellQuote("ct-node-failed:" + operation.path))
+                            .append(" >&2; fi; ")
                     }
 
                     is HostMutation.WriteCandidatesNoReadback -> {
@@ -183,7 +199,9 @@ class RealHostFilesystem @JvmOverloads constructor(
                         }
                         append("; do if echo \"\$candidate\" > ")
                             .append(quotedPath)
-                            .append(" 2>/dev/null; then ok=1; break; fi; done; [ \"\$ok\" -eq 1 ]; ")
+                            .append(" 2>/dev/null; then ok=1; break; fi; done; [ \"\$ok\" -eq 1 ] || printf '%s\\n' ")
+                            .append(shellQuote("ct-node-failed:" + operation.path))
+                            .append(" >&2; ")
                     }
 
                     is HostMutation.WritePreferred -> {
@@ -210,7 +228,9 @@ class RealHostFilesystem @JvmOverloads constructor(
                             .append(quotedPath)
                             .append(" 2>/dev/null)\" = ")
                             .append(shellQuote(operation.fallback))
-                            .append(" ] || exit 1; fi; ")
+                            .append(" ] || printf '%s\\n' ")
+                            .append(shellQuote("ct-node-failed:" + operation.path))
+                            .append(" >&2; fi; ")
                     }
                 }
             }
@@ -441,6 +461,15 @@ class HostApplyEngine(private val fs: HostFilesystem) {
                         cpu.minPath,
                         cpu.minimumCandidates.filter { it > 0 && it <= safetyCeilings[index] }.distinct().sorted().map { it.toString() }
                     )
+                    // Leave the floor readable to non-owners. These ship 0660
+                    // system:system on the Odin 2 Mini, so the app could not read
+                    // them at all and every floor read had to go back through the
+                    // privileged host. Other-read costs nothing — the floor is
+                    // only ever read — and keeps the vendor's owner+group write.
+                    cpuMaxMutations += HostMutation.Chmod(
+                        cpu.minPath,
+                        minimumProtectionMode(originalMinModes[index]),
+                    )
                 } else {
                     journalBeforeMutation(cpu.maxPath, original[index], originalModes[index], true, null, if (original[index] > cpu.selectableMax) listOf(cpu.selectableMax) else emptyList())
                 }
@@ -639,8 +668,26 @@ class HostApplyEngine(private val fs: HostFilesystem) {
 
     private fun writableMode(mode: Int): Int = mode or 0x080
 
+    /**
+     * Final mode for a ceiling node. Always keeps **other-read** (0004).
+     *
+     * Deriving purely from the current mode reproduces the original C0 bug: a
+     * node that ships 0660 — which some Odin 2 Mini units do for policy0 —
+     * becomes `0660 and 0555` = **0440**, readable by nobody but its owner. The
+     * write still succeeds, so it fails silently, and because sysfs modes
+     * survive until reboot every later apply re-applies the same broken mode.
+     * That is precisely the "C0 applies but reads back null" report.
+     *
+     * The 1.0.2-era build fixed this by writing an absolute 444 / 644. Deriving
+     * and then forcing other-read reaches the same place (0664 -> 0444,
+     * 0660 -> 0444) while preserving any group-write the vendor shipped, so its
+     * own services can still manage the node.
+     */
     private fun protectionMode(mode: Int, stock: Boolean): Int =
-        if (stock) mode or 0x080 else mode and 0x16d
+        (if (stock) mode or 0x080 else mode and 0x16d) or 0x004
+
+    /** Floors are left writable *and* readable — see [protectionMode]. */
+    private fun minimumProtectionMode(mode: Int): Int = writableMode(mode) or 0x004
 
     private fun verifyMax(id: String, path: String, targets: List<Long>, mode: Int) {
         val actual = fs.read(path)?.toLongOrNull()
