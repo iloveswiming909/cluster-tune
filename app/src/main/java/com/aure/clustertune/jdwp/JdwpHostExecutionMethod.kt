@@ -73,8 +73,13 @@ class JdwpHostExecutionMethod(
 
     override val id: String = METHOD_ID
 
-    @Volatile
-    private var cachedProbe: Pair<Long, ExecutionProbeResult>? = null
+    // Process-wide. Every AppContainer used to build its own method instance
+    // with its own cache, so one instance could hold a stale "unavailable" from
+    // seconds earlier while another had already connected — which is how a
+    // freshly established connection still reported detected=null.
+    private var cachedProbe: Pair<Long, ExecutionProbeResult>?
+        get() = sharedProbeCache
+        set(value) { sharedProbeCache = value }
 
     /**
      * Availability means "we have a wireless-debugging connection", nothing
@@ -270,6 +275,9 @@ class JdwpHostExecutionMethod(
         const val TAG = "ClusterTuneJdwp"
         const val METHOD_ID = "jdwp-inject"
         const val GAME_ASSISTANT_PKG = "com.odin2.gameassistant"
+
+        @Volatile
+        private var sharedProbeCache: Pair<Long, ExecutionProbeResult>? = null
 
         private const val PROBE_CACHE_MS = 5000L
         private const val SHARED_DIR_NAME = "ClusterScripts"

@@ -46,6 +46,14 @@ class PrivilegedExecutionResolver(
     val configuredMethodIdSnapshot: String? get() = configuredMethodId
     val availableMethodIds: List<String> get() = methods.map { it.id }
 
+    /**
+     * Direct lookup by id, bypassing probing. Used to offer a method that cannot
+     * report itself available yet — jdwp-inject before a connection exists.
+     */
+    fun methodById(methodId: String): PrivilegedExecutionMethod? = synchronized(lock) {
+        methods.firstOrNull { it.id == methodId }
+    }
+
     fun setConfiguredMethodId(methodId: String?) = synchronized(lock) {
         if (configuredMethodId != methodId) {
             configuredMethodId = methodId

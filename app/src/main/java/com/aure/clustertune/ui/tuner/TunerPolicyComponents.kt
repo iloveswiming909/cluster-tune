@@ -59,6 +59,7 @@ import androidx.compose.ui.input.key.type
 import com.aure.clustertune.ui.designsystem.component.rememberCtAdjustable
 import com.aure.clustertune.ui.designsystem.component.animatedScale
 import com.aure.clustertune.ui.designsystem.component.ctAdjustable
+import androidx.compose.animation.core.animateDpAsState
 
 @Composable
 internal fun TunerPolicyCard(
@@ -193,6 +194,7 @@ private fun TunerFrequencyCard(
                         )
                     }
                     TunerFrequencySlider(
+                        active = adjustable.adjusting,
                         valueIndex = valueIndex,
                         maxIndex = maxIndex,
                         onIndexChange = onIndexChange,
@@ -220,13 +222,18 @@ private fun TunerFrequencySlider(
     maxIndex: Int,
     onIndexChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** True while the parent card is in controller adjust mode. */
+    active: Boolean = false,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val sliderColor = if (valueIndex >= maxIndex) colorScheme.onSurfaceVariant.copy(alpha = 0.58f) else colorScheme.primary
     val density = LocalDensity.current
     val trackHeight = with(density) { 4.dp.toPx() }
     val tickRadius = with(density) { 1.4.dp.toPx() }
-    val thumbRadius = with(density) { 7.dp.toPx() }
+    // Grows while the parent card is in adjust mode, so it is obvious which
+    // slider the D-pad is driving without moving the row itself.
+    val thumbRadiusDp by animateDpAsState(if (active) 9.dp else 7.dp, label = "tunerThumb")
+    val thumbRadius = with(density) { thumbRadiusDp.toPx() }
     val cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
 
     BoxWithConstraints(

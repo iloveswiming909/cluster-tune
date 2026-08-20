@@ -256,9 +256,8 @@ fun MainTunerScreen(
                         )
                         if (onOpenWirelessDebugSetup != null) {
                             Text(
-                                text = "If your device isn't rooted, you can apply profiles over " +
-                                    "Android's built-in Wireless debugging — no root, no PC. " +
-                                    "Set it up once per boot below.",
+                                text = "You can apply profiles over Android's built-in " +
+                                    "Wireless debugging. Set it up once per boot below.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -278,7 +277,7 @@ fun MainTunerScreen(
                                     .focusRequester(setupButtonFocus)
                                     .focusProperties { down = connectButtonFocus },
                             ) {
-                                Text("Set up wireless debugging (no root)")
+                                Text("Set up wireless debugging")
                             }
                             if (onConnectWirelessDebug != null) {
                                 Text(

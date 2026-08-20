@@ -470,12 +470,36 @@ class TunerViewModel(
 
     fun autoDetectPrivilegedExecutionMethod() {
         viewModelScope.launch {
-            val methodId = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
-            settingsStorage.persistPrivilegedExecutionMethodId(methodId)
-            transientMessage.value = methodId
-                ?.let { "Using ${formatExecutionMethod(it)}" }
-                ?: "No privileged execution method is available"
-            transientError.value = null
+            val detected = privilegedExecutionResolver.autoDetectBestMethod(forceReprobe = true)
+            if (detected != null) {
+                settingsStorage.persistPrivilegedExecutionMethodId(detected)
+                transientMessage.value = "Using ${formatExecutionMethod(detected)}"
+                transientError.value = null
+                return@launch
+            }
+
+            // Nothing probes available. That is the normal state on an unrooted
+            // device with wireless debugging not currently connected — root and
+            // PServer genuinely are not usable, and jdwp-inject cannot report
+            // itself available until a connection exists. Reporting "Not
+            // selected" left the user with no route forward and no hint that the
+            // one method that *can* work on their device was one screen away.
+            //
+            // So suggest it: select jdwp-inject and point at setup. This only
+            // changes the no-method case; whenever anything actually probes
+            // available, including root on a rooted Odin, that still wins above.
+            val suggestion = privilegedExecutionResolver.methodById("jdwp-inject")?.id
+            if (suggestion != null) {
+                settingsStorage.persistPrivilegedExecutionMethodId(suggestion)
+                privilegedExecutionResolver.setConfiguredMethodId(suggestion)
+                transientMessage.value =
+                    "No method is active yet — selected ${formatExecutionMethod(suggestion)}. " +
+                        "Set it up to finish."
+                transientError.value = null
+            } else {
+                transientMessage.value = "No privileged execution method is available"
+                transientError.value = null
+            }
         }
     }
 

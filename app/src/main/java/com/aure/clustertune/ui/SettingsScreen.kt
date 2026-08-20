@@ -781,6 +781,7 @@ private fun EdgeHandleSlider(
             )
         }
         CtSlider(
+            active = adjustable.adjusting,
             value = pendingValue,
             onValueChange = {
                 pendingValue = it

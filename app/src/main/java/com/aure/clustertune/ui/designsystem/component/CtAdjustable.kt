@@ -17,6 +17,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 
 /**
  * Hover-then-adjust state for a control driven by a game controller.
@@ -63,16 +66,25 @@ internal fun rememberCtAdjustable(): CtAdjustableState {
     return state
 }
 
-/** Hover 1.02, adjusting 1.06 — distinct so the two states cannot be confused. */
+/**
+ * Container scale: 1.02 on **hover only**.
+ *
+ * Entering adjust mode deliberately does not resize the container. The 1.0.2
+ * build signalled adjust mode by growing the slider **knob** (7dp -> 9dp) while
+ * the box stayed put, which reads as "this control is now being driven" rather
+ * than the whole row jumping. Growing the box on A was my invention and it was
+ * wrong; see [adjustingThumbRadius].
+ */
 @Composable
-internal fun CtAdjustableState.animatedScale(): Float {
-    val target = when {
-        adjusting -> 1.06f
-        focused -> 1.02f
-        else -> 1f
-    }
-    return animateFloatAsState(target, label = "ctAdjustableScale").value
-}
+internal fun CtAdjustableState.animatedScale(): Float =
+    animateFloatAsState(if (focused) 1.02f else 1f, label = "ctAdjustableScale").value
+
+/** Knob radius for the adjust-mode feedback: 7dp at rest, 9dp while adjusting. */
+@Composable
+internal fun CtAdjustableState.thumbRadiusDp(
+    rest: Dp = 7.dp,
+    active: Dp = 9.dp,
+): Dp = animateDpAsState(if (adjusting) active else rest, label = "ctAdjustableThumb").value
 
 /**
  * Applies focus tracking, the key contract above, and focusability.

@@ -31,8 +31,9 @@ class AppContainer(context: Context) {
     val wirelessDebugConnectionManager: WirelessDebugConnectionManager
         get() = WirelessDebugConnectionManager.getInstance(appContext)
 
-    val privilegedExecutionResolver: PrivilegedExecutionResolver by lazy {
-        PrivilegedExecutionResolver.default(
+    val privilegedExecutionResolver: PrivilegedExecutionResolver
+        get() = sharedResolver(appContext) {
+            PrivilegedExecutionResolver.default(
             context = appContext,
             jdwpConnectionProvider = wirelessDebugConnectionManager.provider(),
             jdwpSharedShellProvider = { wirelessDebugConnectionManager.sharedShell() },
@@ -40,9 +41,9 @@ class AppContainer(context: Context) {
             jdwpPersistentInjector = { pkg, command, pid, trigger ->
                 wirelessDebugConnectionManager.injectExecPersistent(pkg, command, pid, trigger)
             },
-            jdwpShellUseLock = wirelessDebugConnectionManager.shellUseLock,
-        )
-    }
+                jdwpShellUseLock = wirelessDebugConnectionManager.shellUseLock,
+            )
+        }
 
     val settingsStorage: SettingsStorage by lazy {
         SettingsStorage(appContext)
@@ -64,9 +65,8 @@ class AppContainer(context: Context) {
      * running it serves over Binder and needs no network, so connection state
      * alone would misreport a working setup as soon as Wi-Fi is turned off.
      */
-    val hostClient: ClusterTuneHostClient by lazy {
-        ClusterTuneHostClient(appContext, privilegedExecutionResolver)
-    }
+    val hostClient: ClusterTuneHostClient
+        get() = sharedHostClient(appContext, privilegedExecutionResolver)
 
     /** Cheap, non-blocking: does not attempt to start the host. */
     val isPrivilegedHostRunning: Boolean
@@ -144,6 +144,46 @@ class AppContainer(context: Context) {
 
     private companion object {
         const val TAG = "AppContainer"
+
+        /**
+         * Process-wide singletons.
+         *
+         * MainActivity, the overlay service, the quick-settings tile and the boot
+         * receiver each construct their own AppContainer. With per-instance
+         * copies they each got their own resolver (so probe caches disagreed and
+         * a freshly connected method could still read as "not selected") and
+         * their own host client (so only the first could hold the host's lease —
+         * the rest saw no binder, could not adopt because an *attached* host
+         * never re-announces, and fell through to
+         * `launchHost FAILED: Wireless debugging not connected` even though the
+         * host was up and working).
+         *
+         * `WirelessDebugConnectionManager` was made a singleton for exactly this
+         * reason; these two needed it just as much.
+         */
+        private val sharedLock = Any()
+
+        @Volatile
+        private var resolverInstance: PrivilegedExecutionResolver? = null
+
+        @Volatile
+        private var hostClientInstance: ClusterTuneHostClient? = null
+
+        fun sharedResolver(
+            context: Context,
+            factory: () -> PrivilegedExecutionResolver,
+        ): PrivilegedExecutionResolver = resolverInstance ?: synchronized(sharedLock) {
+            resolverInstance ?: factory().also { resolverInstance = it }
+        }
+
+        fun sharedHostClient(
+            context: Context,
+            resolver: PrivilegedExecutionResolver,
+        ): ClusterTuneHostClient = hostClientInstance ?: synchronized(sharedLock) {
+            hostClientInstance ?: ClusterTuneHostClient(context, resolver).also {
+                hostClientInstance = it
+            }
+        }
     }
 
 }
